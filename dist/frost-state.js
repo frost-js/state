@@ -4,8 +4,25 @@
     (global = typeof globalThis !== 'undefined' ? globalThis : global || self, factory(global.State = {}));
 })(this, (function (exports) { 'use strict';
 
+    /**
+     * Checks whether a value has `Object.prototype`.
+     * Values with a null prototype, arrays, and class instances return `false`.
+     * @param {*} value The value to test.
+     * @returns {boolean} Whether the value is a plain object.
+     */
+    function isPlainObject(value) {
+        return value !== null &&
+            typeof value === 'object' &&
+            Object.getPrototypeOf(value) === Object.prototype;
+    }
+
     const activeEffects = [];
     const effectNextStates = new WeakMap();
+    const stateEffects = new WeakMap();
+
+    const removeEffect = (state, effect) => {
+        stateEffects.get(state)?.delete(effect);
+    };
 
     /**
      * Checks whether state reads are currently being tracked by an active effect.
@@ -28,11 +45,11 @@
     /**
      * Registers a reactive effect that runs immediately and re-runs when any state
      * read inside the callback changes.
-     * Re-execution is scheduled in a microtask unless `.sync()` is used.
+     * Re-execution is coalesced in a microtask unless `.sync()` is used.
      * @param {Function} callback The callback function.
      * @param {{ weak?: boolean }} [options] The effect options.
      * @param {boolean} [options.weak=false] Whether to use a WeakRef for the effect runner.
-     * @returns {Function} The wrapped effect runner.
+     * @returns {Function & { sync: Function, stop: Function }} The wrapped effect runner.
      * @throws {Error} If the effect synchronously triggers itself.
      * @throws {*} Re-throws any error thrown by `callback`.
      */
@@ -40,7 +57,19 @@
         const prevStates = new Set();
         const nextStates = new Set();
 
+        const removeFromStates = (states) => {
+            for (const state of states) {
+                removeEffect(state, ref);
+            }
+
+            states.clear();
+        };
+
         const wrapped = () => {
+            if (stopped) {
+                return;
+            }
+
             if (activeEffects.includes(ref)) {
                 throw new Error('Cannot trigger an effect inside itself');
             }
@@ -52,7 +81,7 @@
             } catch (error) {
                 for (const state of nextStates) {
                     if (!prevStates.has(state)) {
-                        state.effects.delete(ref);
+                        removeEffect(state, ref);
                     }
                 }
 
@@ -65,7 +94,7 @@
 
             for (const state of prevStates) {
                 if (!nextStates.has(state)) {
-                    state.effects.delete(ref);
+                    removeEffect(state, ref);
                 }
             }
 
@@ -78,30 +107,56 @@
             nextStates.clear();
         };
 
-        let running;
+        let running = false;
+        let scheduledJob;
         let pending = false;
+        let stopped = false;
         const debounced = () => {
+            if (stopped) {
+                return;
+            }
+
             if (running) {
                 pending = true;
                 return;
             }
 
-            running = true;
+            if (scheduledJob) {
+                return;
+            }
 
-            Promise.resolve()
-                .then(() => {
+            const job = {};
+
+            scheduledJob = job;
+
+            queueMicrotask(() => {
+                if (stopped || scheduledJob !== job) {
+                    return;
+                }
+
+                scheduledJob = undefined;
+                running = true;
+
+                try {
                     wrapped();
-                })
-                .finally(() => {
+                } finally {
                     running = false;
-                    if (pending) {
+
+                    if (!stopped && pending) {
                         pending = false;
                         debounced();
+                    } else {
+                        pending = false;
                     }
-                });
+                }
+            });
         };
 
-        debounced.sync = wrapped;
+        debounced.sync = () => {
+            scheduledJob = undefined;
+            pending = false;
+            wrapped();
+        };
 
         const ref = weak ?
             new WeakRef(debounced) :
@@ -109,7 +164,25 @@
 
         effectNextStates.set(ref, nextStates);
 
-        wrapped();
+        debounced.stop = () => {
+            if (stopped) {
+                return;
+            }
+
+            stopped = true;
+            scheduledJob = undefined;
+            pending = false;
+            removeFromStates(prevStates);
+            removeFromStates(nextStates);
+            effectNextStates.delete(ref);
+        };
+
+        try {
+            wrapped();
+        } catch (error) {
+            debounced.stop();
+            throw error;
+        }
 
         return debounced;
     }
@@ -126,11 +199,11 @@
         const get = (markEffects = true) => {
             if (markEffects && activeEffects.length) {
                 const activeEffect = activeEffects.at(-1);
+                const states = effectNextStates.get(activeEffect);
 
-                effects.add(activeEffect);
-
-                if (effectNextStates.has(activeEffect)) {
-                    effectNextStates.get(activeEffect).add(state);
+                if (states) {
+                    effects.add(activeEffect);
+                    states.add(state);
                 }
             }
 
@@ -167,16 +240,7 @@
         state[Symbol.toPrimitive] = get;
         state.get = get;
         state.set = set;
-
-        state.cleanup = () => {
-            if (!activeEffects.length) {
-                return;
-            }
-            const activeEffect = activeEffects.at(-1);
-            if (effectNextStates.has(activeEffect) && !effectNextStates.get(activeEffect).has(state)) {
-                effects.delete(activeEffect);
-            }
-        };
+        stateEffects.set(state, effects);
 
         Object.defineProperty(state, 'previous', {
             get: () => previous,
@@ -187,21 +251,7 @@
             set,
         });
 
-        Object.defineProperty(state, 'effects', {
-            get: () => effects,
-        });
-
         return state;
-    }
-
-    /**
-     * Checks whether a value is a plain object constructed by `Object`.
-     * Values with a null prototype and class instances return `false`.
-     * @param {*} value The value to test.
-     * @returns {boolean} Whether the value is a plain object.
-     */
-    function isPlainObject(value) {
-        return value?.constructor === Object;
     }
 
     /** @import { StateAccessor } from './state.js' */
@@ -218,42 +268,6 @@
     class StateStore extends Function {
         #state = new Map();
         #visibleKeys = new Set();
-
-        static #isReservedStateKey(key) {
-            return typeof key === 'string' && (
-                Object.prototype.hasOwnProperty.call(StateStore.prototype, key)
-            );
-        }
-
-        /**
-         * Wraps a plain object in a `StateStore`.
-         * Non-plain values are returned unchanged.
-         * @template T
-         * @param {T} value The value to wrap.
-         * @param {{ deep?: boolean }} [options] The wrap options.
-         * @param {boolean} [options.deep=false] Whether to recursively wrap nested plain objects.
-         * @returns {StateStore|T} The wrapped store, or the original value.
-         * @throws {TypeError} If the wrapped object contains a reserved `StateStore` key.
-         */
-        static wrap(value, options = { deep: false }) {
-            if (value instanceof StateStore) {
-                return value;
-            }
-
-            if (!isPlainObject(value)) {
-                return value;
-            }
-
-            const store = new StateStore();
-
-            for (const [key, val] of Object.entries(value)) {
-                store[key] = options.deep ?
-                    StateStore.wrap(val, options) :
-                    val;
-            }
-
-            return store;
-        }
 
         /**
          * Merges plain-object data into a `StateStore`.
@@ -278,26 +292,65 @@
                 throw new TypeError('First argument must be a StateStore instance');
             }
 
+            return StateStore.#mergeValue(
+                store,
+                value,
+                Boolean(options.deep),
+                new WeakMap(),
+            );
+        }
+
+        /**
+         * Wraps a plain object in a `StateStore`.
+         * Non-plain values are returned unchanged.
+         * @template T
+         * @param {T} value The value to wrap.
+         * @param {{ deep?: boolean }} [options] The wrap options.
+         * @param {boolean} [options.deep=false] Whether to recursively wrap nested plain objects.
+         * @returns {StateStore|T} The wrapped store, or the original value.
+         * @throws {TypeError} If the wrapped object contains a reserved `StateStore` key.
+         */
+        static wrap(value, options = { deep: false }) {
+            if (value instanceof StateStore) {
+                return value;
+            }
+
+            return StateStore.#mergeValue(
+                undefined,
+                value,
+                Boolean(options.deep),
+                new WeakMap(),
+            );
+        }
+
+        static #isReservedStateKey(key) {
+            return typeof key === 'string' && (
+                Object.prototype.hasOwnProperty.call(StateStore.prototype, key)
+            );
+        }
+
+        static #mergeValue(store, value, deep, stores) {
             if (!isPlainObject(value)) {
                 return value;
             }
 
+            if (stores.has(value)) {
+                return stores.get(value);
+            }
+
+            const target = store instanceof StateStore ? store : new StateStore();
+
+            stores.set(value, target);
+
             for (const [key, val] of Object.entries(value)) {
-                store[key] = options.deep ?
-                    StateStore.merge(
-                        store.has(key) ?
-                            store.use(key).value :
-                            undefined,
-                        val,
-                        {
-                            ...options,
-                            allowFallback: true,
-                        },
-                    ) :
+                const current = target.has(key) ? target.use(key).get(false) : undefined;
+
+                target[key] = deep ?
+                    StateStore.#mergeValue(current, val, true, stores) :
                     val;
             }
 
-            return store;
+            return target;
         }
 
         /**
@@ -306,12 +359,12 @@
         constructor() {
             super();
 
-            return new Proxy(
+            const proxy = new Proxy(
                 this,
                 {
                     apply(target, thisArg, args) {
                         if (!args.length) {
-                            return target;
+                            return proxy;
                         }
 
                         return target.use(...args);
@@ -345,7 +398,7 @@
                                 configurable: true,
                                 enumerable: true,
                                 writable: true,
-                                value: target.use(prop).value,
+                                value: target.#state.get(prop).get(false),
                             };
                         }
 
@@ -377,6 +430,8 @@
                     },
                 },
             );
+
+            return proxy;
         }
 
         /**
@@ -403,7 +458,15 @@
          * @throws {TypeError} If `data` contains a reserved `StateStore` key.
          */
         set(data) {
-            for (const [key, value] of Object.entries(data)) {
+            const entries = Object.entries(data);
+
+            for (const [key] of entries) {
+                if (StateStore.#isReservedStateKey(key)) {
+                    throw new TypeError(`"${key}" is a reserved StateStore key`);
+                }
+            }
+
+            for (const [key, value] of entries) {
                 this.#assignKey(key, value);
             }
         }
@@ -444,22 +507,6 @@
             return state;
         }
 
-        #readKey(key) {
-            if (this.#state.has(key)) {
-                return this.#state.get(key).value;
-            }
-
-            if (!isTrackingEffects()) {
-                return undefined;
-            }
-
-            const state = useState(undefined);
-
-            this.#state.set(key, state);
-
-            return state.value;
-        }
-
         #assignKey(key, value) {
             if (StateStore.#isReservedStateKey(key)) {
                 throw new TypeError(`"${key}" is a reserved StateStore key`);
@@ -475,6 +522,22 @@
 
             this.#state.set(key, state);
             this.#visibleKeys.add(key);
+        }
+
+        #readKey(key) {
+            if (this.#state.has(key)) {
+                return this.#state.get(key).value;
+            }
+
+            if (!isTrackingEffects()) {
+                return undefined;
+            }
+
+            const state = useState(undefined);
+
+            this.#state.set(key, state);
+
+            return state.value;
         }
     }
 

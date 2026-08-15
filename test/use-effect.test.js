@@ -70,6 +70,23 @@ describe('useEffect', () => {
             assert.strictEqual(runs, 3);
         });
 
+        it('coalesces synchronous changes', async () => {
+            const state = useState(0);
+            let runs = 0;
+
+            useEffect(() => {
+                runs += 1;
+                state();
+            });
+
+            state(1);
+            state(2);
+            state(3);
+            await tick();
+
+            assert.strictEqual(runs, 2);
+        });
+
         it('runs synchronously with effect.sync()', () => {
             const state = useState(1);
             let runs = 0;
@@ -82,6 +99,82 @@ describe('useEffect', () => {
             assert.strictEqual(runs, 1);
 
             effect.sync();
+
+            assert.strictEqual(runs, 2);
+        });
+
+        it('cancels a pending run when sync() is used', async () => {
+            const state = useState(0);
+            const values = [];
+
+            const effect = useEffect(() => {
+                values.push(state());
+            });
+
+            state(1);
+            effect.sync();
+            await tick();
+
+            assert.deepStrictEqual(values, [0, 1]);
+        });
+
+        it('does not let canceled work consume a newer run', async () => {
+            const state = useState(0);
+            const values = [];
+
+            const effect = useEffect(() => {
+                values.push(state());
+            });
+
+            state(1);
+            effect.sync();
+            state(2);
+            await tick();
+
+            assert.deepStrictEqual(values, [0, 1, 2]);
+        });
+
+        it('stops an effect and cancels pending work', async () => {
+            const state = useState(0);
+            let runs = 0;
+
+            const effect = useEffect(() => {
+                runs += 1;
+                state();
+            });
+
+            state(1);
+            effect.stop();
+            effect.stop();
+            effect();
+            effect.sync();
+            state(2);
+            await tick();
+
+            assert.strictEqual(runs, 1);
+        });
+
+        it('can stop while running', async () => {
+            const state = useState(0);
+            let shouldStop = false;
+            let runs = 0;
+
+            const effect = useEffect(() => {
+                runs += 1;
+                state();
+
+                if (shouldStop) {
+                    effect.stop();
+                    state();
+                }
+            });
+
+            shouldStop = true;
+            state(1);
+            await tick();
+
+            state(2);
+            await tick();
 
             assert.strictEqual(runs, 2);
         });
@@ -137,6 +230,41 @@ describe('useEffect', () => {
             await tick();
             assert.strictEqual(runs, 3);
         });
+
+        it('keeps previous dependencies when a run fails', async () => {
+            const useA = useState(true);
+            const a = useState(0);
+            const b = useState(0);
+            let shouldThrow = true;
+            let runs = 0;
+
+            const effect = useEffect(() => {
+                runs += 1;
+
+                if (useA()) {
+                    a();
+                    return;
+                }
+
+                b();
+
+                if (shouldThrow) {
+                    shouldThrow = false;
+                    throw new Error('boom');
+                }
+            });
+
+            useA(false);
+            assert.throws(() => effect.sync(), /boom/);
+
+            b(1);
+            await tick();
+            assert.strictEqual(runs, 2);
+
+            a(1);
+            await tick();
+            assert.strictEqual(runs, 3);
+        });
     });
 
     describe('error handling', () => {
@@ -156,56 +284,56 @@ describe('useEffect', () => {
             }, /Cannot trigger an effect inside itself/);
         });
 
-        it('cleans up bookkeeping when the initial setup throws', () => {
-            const state = useState(1);
-            const other = useState(2);
+        it('cancels subscriptions and work when setup throws', async () => {
+            const state = useState(0);
+            let runs = 0;
 
             assert.throws(() => {
                 useEffect(() => {
-                    state();
+                    runs += 1;
+                    state(state() + 1);
                     throw new Error('boom');
                 });
             }, /boom/);
 
-            assert.strictEqual(state.effects.size, 0);
+            state(2);
+            await tick();
 
-            other();
-
-            assert.strictEqual(other.effects.size, 0);
+            assert.strictEqual(runs, 1);
         });
     });
 
     describe('weak effects', () => {
-        it('allows weak effects to be collected', async function() {
-            if (typeof global.gc !== 'function') {
-                this.skip();
-            }
+        it('removes a collected weak effect on the next write', async () => {
+            const NativeWeakRef = globalThis.WeakRef;
+            let target;
 
-            const state = useState(1);
-            let runs = 0;
-            let _effect = useEffect(() => {
-                runs += 1;
-                state();
-            }, { weak: true });
+            globalThis.WeakRef = class {
+                constructor(value) {
+                    target = value;
+                }
 
-            const refs = [...state.effects];
-            assert.strictEqual(refs.length, 1);
+                deref() {
+                    return target;
+                }
+            };
 
-            const ref = refs[0];
-            _effect = null;
+            try {
+                const state = useState(1);
+                let runs = 0;
 
-            for (let i = 0; i < 5 && ref.deref(); i += 1) {
-                global.gc();
+                useEffect(() => {
+                    runs += 1;
+                    state();
+                }, { weak: true });
+
+                target = undefined;
+                state(2);
                 await tick();
-            }
 
-            state(2);
-            await tick();
-
-            if (!ref.deref()) {
                 assert.strictEqual(runs, 1);
-            } else {
-                assert.strictEqual(runs, 2);
+            } finally {
+                globalThis.WeakRef = NativeWeakRef;
             }
         });
     });

@@ -60,8 +60,8 @@ useEffect(() => {
     console.log(`${first()} ${last()}`);
 });
 
-last('Byron'); // logs "Ada Byron" on the next microtask
-first.value = 'Augusta'; // logs "Augusta Byron"
+last('Byron');
+first.value = 'Augusta'; // logs "Augusta Byron" once on the next microtask
 ```
 
 ### Keyed stores
@@ -133,8 +133,9 @@ Options:
 
 The returned runner supports:
 
-- `effect()`: schedule a re-run in a microtask
-- `effect.sync()`: run immediately
+- `effect()`: schedule a coalesced re-run in a microtask
+- `effect.sync()`: run immediately and cancel any pending re-run
+- `effect.stop()`: stop the effect, cancel pending work, and unsubscribe
 
 ```js
 import { useEffect, useState } from '@fr0st/state';
@@ -146,8 +147,9 @@ const effect = useEffect(() => {
     console.log(a() + b());
 });
 
-a(3); // logs 5 on the next microtask
-effect.sync(); // logs immediately
+a(3);
+effect.sync(); // logs 5 immediately and cancels the pending microtask
+effect.stop();
 ```
 
 ### `StateStore`
@@ -241,15 +243,21 @@ settings.ui.theme; // 'light'
 settings.ui.compact; // true
 ```
 
+Deep wrapping and merging preserve cycles and shared plain-object references.
+
 ## Behavior Notes
 
 - `useEffect()` tracks only the states read during the latest successful run.
-- `useEffect()` schedules normal re-runs in a microtask, and `.sync()` bypasses that scheduling.
+- `useEffect()` coalesces normal re-runs in a microtask.
+- `effect.sync()` runs immediately and cancels a pending re-run.
+- `effect.stop()` permanently cancels the effect and releases its subscriptions.
 - `store.set(...)` assigns top-level keys only. Nested plain objects remain plain values.
 - Use `StateStore.wrap(..., { deep: true })` or `StateStore.merge(..., { deep: true })` for nested reactive stores.
+- Deep wrap and merge preserve cycles and shared references.
+- Arrays, dates, class instances, and null-prototype objects are treated as plain values rather than nested stores.
 - Missing property reads such as `store.missing` return `undefined`. Reads made during effect tracking still subscribe to later assignment without exposing the key.
 - API keys such as `use`, `set`, `has`, and `keys` are reserved and cannot be used as state keys.
-- Weak effects rely on `WeakRef`. The test suite uses `node --expose-gc` to cover weak-reference behavior.
+- Weak effects rely on `WeakRef`.
 
 ## Development
 

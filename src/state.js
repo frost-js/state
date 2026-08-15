@@ -1,5 +1,10 @@
 const activeEffects = [];
 const effectNextStates = new WeakMap();
+const stateEffects = new WeakMap();
+
+const removeEffect = (state, effect) => {
+    stateEffects.get(state)?.delete(effect);
+};
 
 /**
  * Checks whether state reads are currently being tracked by an active effect.
@@ -22,11 +27,11 @@ export function isTrackingEffects() {
 /**
  * Registers a reactive effect that runs immediately and re-runs when any state
  * read inside the callback changes.
- * Re-execution is scheduled in a microtask unless `.sync()` is used.
+ * Re-execution is coalesced in a microtask unless `.sync()` is used.
  * @param {Function} callback The callback function.
  * @param {{ weak?: boolean }} [options] The effect options.
  * @param {boolean} [options.weak=false] Whether to use a WeakRef for the effect runner.
- * @returns {Function} The wrapped effect runner.
+ * @returns {Function & { sync: Function, stop: Function }} The wrapped effect runner.
  * @throws {Error} If the effect synchronously triggers itself.
  * @throws {*} Re-throws any error thrown by `callback`.
  */
@@ -34,7 +39,19 @@ export function useEffect(callback, { weak = false } = {}) {
     const prevStates = new Set();
     const nextStates = new Set();
 
+    const removeFromStates = (states) => {
+        for (const state of states) {
+            removeEffect(state, ref);
+        }
+
+        states.clear();
+    };
+
     const wrapped = () => {
+        if (stopped) {
+            return;
+        }
+
         if (activeEffects.includes(ref)) {
             throw new Error('Cannot trigger an effect inside itself');
         }
@@ -46,7 +63,7 @@ export function useEffect(callback, { weak = false } = {}) {
         } catch (error) {
             for (const state of nextStates) {
                 if (!prevStates.has(state)) {
-                    state.effects.delete(ref);
+                    removeEffect(state, ref);
                 }
             }
 
@@ -59,7 +76,7 @@ export function useEffect(callback, { weak = false } = {}) {
 
         for (const state of prevStates) {
             if (!nextStates.has(state)) {
-                state.effects.delete(ref);
+                removeEffect(state, ref);
             }
         }
 
@@ -72,30 +89,56 @@ export function useEffect(callback, { weak = false } = {}) {
         nextStates.clear();
     };
 
-    let running;
+    let running = false;
+    let scheduledJob;
     let pending = false;
+    let stopped = false;
     const debounced = () => {
+        if (stopped) {
+            return;
+        }
+
         if (running) {
             pending = true;
             return;
         }
 
-        running = true;
+        if (scheduledJob) {
+            return;
+        }
 
-        Promise.resolve()
-            .then(() => {
+        const job = {};
+
+        scheduledJob = job;
+
+        queueMicrotask(() => {
+            if (stopped || scheduledJob !== job) {
+                return;
+            }
+
+            scheduledJob = undefined;
+            running = true;
+
+            try {
                 wrapped();
-            })
-            .finally(() => {
+            } finally {
                 running = false;
-                if (pending) {
+
+                if (!stopped && pending) {
                     pending = false;
                     debounced();
+                } else {
+                    pending = false;
                 }
-            });
+            }
+        });
     };
 
-    debounced.sync = wrapped;
+    debounced.sync = () => {
+        scheduledJob = undefined;
+        pending = false;
+        wrapped();
+    };
 
     const ref = weak ?
         new WeakRef(debounced) :
@@ -103,7 +146,25 @@ export function useEffect(callback, { weak = false } = {}) {
 
     effectNextStates.set(ref, nextStates);
 
-    wrapped();
+    debounced.stop = () => {
+        if (stopped) {
+            return;
+        }
+
+        stopped = true;
+        scheduledJob = undefined;
+        pending = false;
+        removeFromStates(prevStates);
+        removeFromStates(nextStates);
+        effectNextStates.delete(ref);
+    };
+
+    try {
+        wrapped();
+    } catch (error) {
+        debounced.stop();
+        throw error;
+    }
 
     return debounced;
 };
@@ -121,11 +182,11 @@ export function useState(value) {
     const get = (markEffects = true) => {
         if (markEffects && activeEffects.length) {
             const activeEffect = activeEffects.at(-1);
+            const states = effectNextStates.get(activeEffect);
 
-            effects.add(activeEffect);
-
-            if (effectNextStates.has(activeEffect)) {
-                effectNextStates.get(activeEffect).add(state);
+            if (states) {
+                effects.add(activeEffect);
+                states.add(state);
             }
         }
 
@@ -162,16 +223,7 @@ export function useState(value) {
     state[Symbol.toPrimitive] = get;
     state.get = get;
     state.set = set;
-
-    state.cleanup = () => {
-        if (!activeEffects.length) {
-            return;
-        }
-        const activeEffect = activeEffects.at(-1);
-        if (effectNextStates.has(activeEffect) && !effectNextStates.get(activeEffect).has(state)) {
-            effects.delete(activeEffect);
-        }
-    };
+    stateEffects.set(state, effects);
 
     Object.defineProperty(state, 'previous', {
         get: () => previous,
@@ -180,10 +232,6 @@ export function useState(value) {
     Object.defineProperty(state, 'value', {
         get,
         set,
-    });
-
-    Object.defineProperty(state, 'effects', {
-        get: () => effects,
     });
 
     return state;

@@ -109,5 +109,12 @@ describe('useState', () => {
 
             assert.strictEqual(runs, 1);
         });
+
+        it('keeps effect bookkeeping private', () => {
+            const state = useState(1);
+
+            assert.strictEqual('effects' in state, false);
+            assert.strictEqual('cleanup' in state, false);
+        });
     });
 });

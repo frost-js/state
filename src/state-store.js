@@ -38,26 +38,12 @@ export default class StateStore extends Function {
             throw new TypeError('First argument must be a StateStore instance');
         }
 
-        if (!isPlainObject(value)) {
-            return value;
-        }
-
-        for (const [key, val] of Object.entries(value)) {
-            store[key] = options.deep ?
-                StateStore.merge(
-                    store.has(key) ?
-                        store.use(key).value :
-                        undefined,
-                    val,
-                    {
-                        ...options,
-                        allowFallback: true,
-                    },
-                ) :
-                val;
-        }
-
-        return store;
+        return StateStore.#mergeValue(
+            store,
+            value,
+            Boolean(options.deep),
+            new WeakMap(),
+        );
     }
 
     /**
@@ -75,19 +61,12 @@ export default class StateStore extends Function {
             return value;
         }
 
-        if (!isPlainObject(value)) {
-            return value;
-        }
-
-        const store = new StateStore();
-
-        for (const [key, val] of Object.entries(value)) {
-            store[key] = options.deep ?
-                StateStore.wrap(val, options) :
-                val;
-        }
-
-        return store;
+        return StateStore.#mergeValue(
+            undefined,
+            value,
+            Boolean(options.deep),
+            new WeakMap(),
+        );
     }
 
     static #isReservedStateKey(key) {
@@ -96,18 +75,42 @@ export default class StateStore extends Function {
         );
     }
 
+    static #mergeValue(store, value, deep, stores) {
+        if (!isPlainObject(value)) {
+            return value;
+        }
+
+        if (stores.has(value)) {
+            return stores.get(value);
+        }
+
+        const target = store instanceof StateStore ? store : new StateStore();
+
+        stores.set(value, target);
+
+        for (const [key, val] of Object.entries(value)) {
+            const current = target.has(key) ? target.use(key).get(false) : undefined;
+
+            target[key] = deep ?
+                StateStore.#mergeValue(current, val, true, stores) :
+                val;
+        }
+
+        return target;
+    }
+
     /**
      * Creates a new callable `StateStore` proxy.
      */
     constructor() {
         super();
 
-        return new Proxy(
+        const proxy = new Proxy(
             this,
             {
                 apply(target, thisArg, args) {
                     if (!args.length) {
-                        return target;
+                        return proxy;
                     }
 
                     return target.use(...args);
@@ -141,7 +144,7 @@ export default class StateStore extends Function {
                             configurable: true,
                             enumerable: true,
                             writable: true,
-                            value: target.use(prop).value,
+                            value: target.#state.get(prop).get(false),
                         };
                     }
 
@@ -173,6 +176,8 @@ export default class StateStore extends Function {
                 },
             },
         );
+
+        return proxy;
     }
 
     /**
@@ -199,7 +204,15 @@ export default class StateStore extends Function {
      * @throws {TypeError} If `data` contains a reserved `StateStore` key.
      */
     set(data) {
-        for (const [key, value] of Object.entries(data)) {
+        const entries = Object.entries(data);
+
+        for (const [key] of entries) {
+            if (StateStore.#isReservedStateKey(key)) {
+                throw new TypeError(`"${key}" is a reserved StateStore key`);
+            }
+        }
+
+        for (const [key, value] of entries) {
             this.#assignKey(key, value);
         }
     }

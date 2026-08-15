@@ -64,6 +64,16 @@ describe('StateStore', () => {
             assert.strictEqual(store.name, 'counter');
             assert.strictEqual(store.use('name')(), 'counter');
         });
+
+        it('returns the proxy when called without arguments', () => {
+            const store = new StateStore();
+
+            assert.strictEqual(store(), store);
+
+            store().count = 1;
+
+            assert.strictEqual(store.count, 1);
+        });
     });
 
     describe('state accessors', () => {
@@ -160,6 +170,23 @@ describe('StateStore', () => {
                 ['a', 'b'],
             );
         });
+
+        it('does not track values while enumerating keys', async () => {
+            const store = new StateStore();
+            let runs = 0;
+
+            store.count = 1;
+
+            useEffect(() => {
+                runs += 1;
+                Object.keys(store);
+            });
+
+            store.count = 2;
+            await tick();
+
+            assert.strictEqual(runs, 1);
+        });
     });
 
     describe('reserved keys', () => {
@@ -190,6 +217,17 @@ describe('StateStore', () => {
                 () => store.set({ use: 1 }),
                 /reserved StateStore key/,
             );
+        });
+
+        it('validates set() before changing the store', () => {
+            const store = new StateStore();
+
+            assert.throws(
+                () => store.set({ added: 1, use: 2 }),
+                /reserved StateStore key/,
+            );
+
+            assert.strictEqual(store.has('added'), false);
         });
 
         it('allows internal-looking keys when they are not part of the API', () => {
@@ -273,6 +311,19 @@ describe('StateStore', () => {
             assert.strictEqual(StateStore.wrap(arr), arr);
         });
 
+        it('detects plain objects by prototype', () => {
+            const value = { a: 1 };
+
+            Object.defineProperty(value, 'constructor', {
+                value: null,
+            });
+
+            const wrapped = StateStore.wrap(value);
+
+            assert.ok(wrapped instanceof StateStore);
+            assert.strictEqual(wrapped.a, 1);
+        });
+
         it('keeps nested objects plain when deep=false', () => {
             const wrapped = StateStore.wrap({ a: { b: 1 } });
 
@@ -287,6 +338,18 @@ describe('StateStore', () => {
             assert.ok(wrapped instanceof StateStore);
             assert.ok(wrapped.a instanceof StateStore);
             assert.strictEqual(wrapped.a.b, 1);
+        });
+
+        it('preserves cycles and shared references when wrapping deeply', () => {
+            const shared = { value: 1 };
+            const source = { a: shared, b: shared };
+
+            source.self = source;
+
+            const wrapped = StateStore.wrap(source, { deep: true });
+
+            assert.strictEqual(wrapped.self, wrapped);
+            assert.strictEqual(wrapped.a, wrapped.b);
         });
     });
 
@@ -356,6 +419,19 @@ describe('StateStore', () => {
             assert.strictEqual(first, second);
             assert.strictEqual(store.a.b, 1);
             assert.strictEqual(store.a.c, 2);
+        });
+
+        it('preserves cycles and shared references when merging deeply', () => {
+            const store = new StateStore();
+            const shared = { value: 1 };
+            const source = { a: shared, b: shared };
+
+            source.self = source;
+
+            StateStore.merge(store, source, { deep: true });
+
+            assert.strictEqual(store.self, store);
+            assert.strictEqual(store.a, store.b);
         });
     });
 
