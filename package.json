@@ -41,8 +41,8 @@
         "build": "npm run js-compile && npm run js-minify",
         "js-compile": "rollup --config",
         "js-lint": "eslint",
-        "js-minify": "terser --compress passes=2 --mangle --source-map \"content=dist/frost-state.js.map\" --output dist/frost-state.min.js dist/frost-state.js",
-        "test": "node --expose-gc ./node_modules/mocha/bin/mocha.js"
+        "js-minify": "terser --compress passes=2 --mangle --source-map \"content=dist/frost-state.js.map,url=frost-state.min.js.map\" --output dist/frost-state.min.js dist/frost-state.js",
+        "test": "node --expose-gc ./node_modules/mocha/bin/mocha.js --forbid-only"
     },
     "devDependencies": {
         "@fr0st/eslint-config": "^3.0.0",
