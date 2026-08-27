@@ -263,7 +263,7 @@ Deep wrapping and merging preserve cycles and shared plain-object references.
 
 ```bash
 npm test
-npm run js-lint
+npm run lint
 npm run build
 ```
 

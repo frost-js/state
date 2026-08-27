@@ -1,6 +1,6 @@
 {
     "name": "@fr0st/state",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Small reactive state primitives for values, effects, and keyed stores.",
     "keywords": [
         "state",
@@ -38,14 +38,14 @@
         "src"
     ],
     "scripts": {
-        "build": "npm run js-compile && npm run js-minify",
-        "js-compile": "rollup --config",
-        "js-lint": "eslint",
-        "js-minify": "terser --compress passes=2 --mangle --source-map \"content=dist/frost-state.js.map,url=frost-state.min.js.map\" --output dist/frost-state.min.js dist/frost-state.js",
+        "build": "npm run bundle && npm run minify",
+        "bundle": "rollup --config",
+        "lint": "eslint",
+        "minify": "terser --compress passes=2 --mangle --source-map \"content=dist/frost-state.js.map,url=frost-state.min.js.map\" --output dist/frost-state.min.js dist/frost-state.js",
         "test": "node --expose-gc ./node_modules/mocha/bin/mocha.js --forbid-only"
     },
     "devDependencies": {
-        "@fr0st/eslint-config": "^4.0.0",
+        "@fr0st/eslint-config": "^5.0.0",
         "eslint": "^10.8.1",
         "mocha": "^11.8.0",
         "rollup": "^4.62.4",

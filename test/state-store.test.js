@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'mocha';
 import { StateStore, useEffect } from '../src/index.js';
-
-const tick = () => Promise.resolve();
+import { tick } from './support.js';
 
 describe('StateStore', () => {
     describe('proxy access', () => {
