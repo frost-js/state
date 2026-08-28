@@ -70,6 +70,15 @@ export default class StateStore extends Function {
         );
     }
 
+    /**
+     * Wraps or merges a plain-object value while preserving cycles and shared references.
+     * @template T
+     * @param {*} store The existing value that may be reused as the target store.
+     * @param {T} value The value to wrap or merge.
+     * @param {boolean} deep Whether to process nested plain objects recursively.
+     * @param {WeakMap<object, StateStore>} stores The previously visited source objects and their stores.
+     * @returns {StateStore|T} The merged store, or the original non-plain value.
+     */
     static #mergeValue(store, value, deep, stores) {
         if (!isPlainObject(value)) {
             return value;
@@ -100,6 +109,7 @@ export default class StateStore extends Function {
     constructor() {
         super();
 
+        // Free configurable Function metadata so names such as `name` and `length` can be state keys.
         for (const key of Reflect.ownKeys(this)) {
             if (typeof key !== 'string') {
                 continue;
@@ -260,6 +270,12 @@ export default class StateStore extends Function {
         return state;
     }
 
+    /**
+     * Creates or updates a visible state key.
+     * @param {string} key The state key.
+     * @param {*} value The value to store.
+     * @throws {TypeError} If `key` is reserved by `StateStore`.
+     */
     #assignKey(key, value) {
         if (this.#isReservedStateKey(key)) {
             throw new TypeError(`"${key}" is a reserved StateStore key`);
@@ -277,6 +293,11 @@ export default class StateStore extends Function {
         this.#visibleKeys.add(key);
     }
 
+    /**
+     * Checks whether a key belongs to the store API or a non-configurable Function property.
+     * @param {string|symbol} key The candidate property key.
+     * @returns {boolean} Whether the key cannot be used for state.
+     */
     #isReservedStateKey(key) {
         if (typeof key !== 'string') {
             return false;
@@ -291,6 +312,11 @@ export default class StateStore extends Function {
         return descriptor?.configurable === false;
     }
 
+    /**
+     * Reads a state key, creating a hidden accessor only when an effect is tracking the missing key.
+     * @param {string} key The state key.
+     * @returns {*} The current value, or `undefined` when the key is missing.
+     */
     #readKey(key) {
         if (this.#state.has(key)) {
             return this.#state.get(key).value;

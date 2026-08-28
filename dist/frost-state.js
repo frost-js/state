@@ -226,6 +226,15 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 			if (value instanceof StateStore) return value;
 			return StateStore.#mergeValue(void 0, value, Boolean(options.deep), /* @__PURE__ */ new WeakMap());
 		}
+		/**
+		* Wraps or merges a plain-object value while preserving cycles and shared references.
+		* @template T
+		* @param {*} store The existing value that may be reused as the target store.
+		* @param {T} value The value to wrap or merge.
+		* @param {boolean} deep Whether to process nested plain objects recursively.
+		* @param {WeakMap<object, StateStore>} stores The previously visited source objects and their stores.
+		* @returns {StateStore|T} The merged store, or the original non-plain value.
+		*/
 		static #mergeValue(store, value, deep, stores) {
 			if (!isPlainObject(value)) return value;
 			if (stores.has(value)) return stores.get(value);
@@ -337,6 +346,12 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 			this.#visibleKeys.add(key);
 			return state;
 		}
+		/**
+		* Creates or updates a visible state key.
+		* @param {string} key The state key.
+		* @param {*} value The value to store.
+		* @throws {TypeError} If `key` is reserved by `StateStore`.
+		*/
 		#assignKey(key, value) {
 			if (this.#isReservedStateKey(key)) throw new TypeError(`"${key}" is a reserved StateStore key`);
 			if (this.#state.has(key)) {
@@ -348,11 +363,21 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 			this.#state.set(key, state);
 			this.#visibleKeys.add(key);
 		}
+		/**
+		* Checks whether a key belongs to the store API or a non-configurable Function property.
+		* @param {string|symbol} key The candidate property key.
+		* @returns {boolean} Whether the key cannot be used for state.
+		*/
 		#isReservedStateKey(key) {
 			if (typeof key !== "string") return false;
 			if (Object.prototype.hasOwnProperty.call(StateStore.prototype, key)) return true;
 			return Reflect.getOwnPropertyDescriptor(this, key)?.configurable === false;
 		}
+		/**
+		* Reads a state key, creating a hidden accessor only when an effect is tracking the missing key.
+		* @param {string} key The state key.
+		* @returns {*} The current value, or `undefined` when the key is missing.
+		*/
 		#readKey(key) {
 			if (this.#state.has(key)) return this.#state.get(key).value;
 			if (!isTrackingEffects()) return;
