@@ -182,7 +182,8 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 	* state accessors are available via `store.use(key)` or `store(key)`.
 	* Missing string-key reads return `undefined`. Reads made during effect
 	* tracking subscribe to later assignments without exposing the key.
-	* API keys are reserved and cannot be used as state keys.
+	* API keys and non-configurable Function keys are reserved and cannot be used
+	* as state keys.
 	*/
 	var StateStore = class StateStore extends Function {
 		#state = /* @__PURE__ */ new Map();
@@ -225,9 +226,6 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 			if (value instanceof StateStore) return value;
 			return StateStore.#mergeValue(void 0, value, Boolean(options.deep), /* @__PURE__ */ new WeakMap());
 		}
-		static #isReservedStateKey(key) {
-			return typeof key === "string" && Object.prototype.hasOwnProperty.call(StateStore.prototype, key);
-		}
 		static #mergeValue(store, value, deep, stores) {
 			if (!isPlainObject(value)) return value;
 			if (stores.has(value)) return stores.get(value);
@@ -244,6 +242,10 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 		*/
 		constructor() {
 			super();
+			for (const key of Reflect.ownKeys(this)) {
+				if (typeof key !== "string") continue;
+				if (Reflect.getOwnPropertyDescriptor(this, key)?.configurable) Reflect.deleteProperty(this, key);
+			}
 			const proxy = new Proxy(this, {
 				apply(target, thisArg, args) {
 					if (!args.length) return proxy;
@@ -251,7 +253,7 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 				},
 				get(target, prop) {
 					if (typeof prop === "symbol") return Reflect.get(target, prop, target);
-					if (StateStore.#isReservedStateKey(prop)) {
+					if (target.#isReservedStateKey(prop)) {
 						const value = Reflect.get(target, prop, target);
 						if (typeof value === "function") return value.bind(target);
 						return value;
@@ -270,7 +272,7 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 				},
 				has(target, prop) {
 					if (typeof prop === "symbol") return Reflect.has(target, prop);
-					return StateStore.#isReservedStateKey(prop) || target.has(prop);
+					return target.#isReservedStateKey(prop) || target.has(prop);
 				},
 				ownKeys(target) {
 					const baseKeys = Reflect.ownKeys(target);
@@ -295,7 +297,7 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 		}
 		/**
 		* Retrieves the stored state keys.
-		* Reserved API keys are not included.
+		* Reserved keys are not included.
 		* @returns {IterableIterator<string>} The key iterator.
 		*/
 		keys() {
@@ -308,7 +310,7 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 		*/
 		set(data) {
 			const entries = Object.entries(data);
-			for (const [key] of entries) if (StateStore.#isReservedStateKey(key)) throw new TypeError(`"${key}" is a reserved StateStore key`);
+			for (const [key] of entries) if (this.#isReservedStateKey(key)) throw new TypeError(`"${key}" is a reserved StateStore key`);
 			for (const [key, value] of entries) this.#assignKey(key, value);
 		}
 		/**
@@ -318,10 +320,10 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 		* @param {string} key The state key.
 		* @param {T} [defaultValue] The default value when creating.
 		* @returns {StateAccessor<T>} The state accessor for the key.
-		* @throws {TypeError} If `key` is reserved for the `StateStore` API.
+		* @throws {TypeError} If `key` is reserved by `StateStore`.
 		*/
 		use(key, defaultValue) {
-			if (StateStore.#isReservedStateKey(key)) throw new TypeError(`"${key}" is a reserved StateStore key`);
+			if (this.#isReservedStateKey(key)) throw new TypeError(`"${key}" is a reserved StateStore key`);
 			if (this.#state.has(key)) {
 				const state = this.#state.get(key);
 				if (!this.has(key)) {
@@ -336,7 +338,7 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 			return state;
 		}
 		#assignKey(key, value) {
-			if (StateStore.#isReservedStateKey(key)) throw new TypeError(`"${key}" is a reserved StateStore key`);
+			if (this.#isReservedStateKey(key)) throw new TypeError(`"${key}" is a reserved StateStore key`);
 			if (this.#state.has(key)) {
 				this.#visibleKeys.add(key);
 				this.#state.get(key).value = value;
@@ -345,6 +347,11 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 			const state = useState(value);
 			this.#state.set(key, state);
 			this.#visibleKeys.add(key);
+		}
+		#isReservedStateKey(key) {
+			if (typeof key !== "string") return false;
+			if (Object.prototype.hasOwnProperty.call(StateStore.prototype, key)) return true;
+			return Reflect.getOwnPropertyDescriptor(this, key)?.configurable === false;
 		}
 		#readKey(key) {
 			if (this.#state.has(key)) return this.#state.get(key).value;

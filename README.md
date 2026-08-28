@@ -281,7 +281,7 @@ Deep wrapping and merging preserve cycles and shared plain-object references.
 - Deep wrap and merge preserve cycles and shared references.
 - Arrays, dates, class instances, and null-prototype objects are treated as plain values rather than nested stores.
 - Missing property reads such as `store.missing` return `undefined`. Reads made during effect tracking still subscribe to later assignment without exposing the key.
-- API keys such as `use`, `set`, `has`, and `keys` are reserved and cannot be used as state keys.
+- API keys such as `use`, `set`, `has`, and `keys`, along with the non-configurable Function keys `arguments`, `caller`, and `prototype`, are reserved and cannot be used as state keys.
 - Weak effects rely on `WeakRef`.
 
 ## Development

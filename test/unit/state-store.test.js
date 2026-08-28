@@ -59,9 +59,23 @@ describe('StateStore', () => {
             const store = new StateStore();
 
             store.name = 'counter';
+            store.length = 1;
 
             assert.strictEqual(store.name, 'counter');
             assert.strictEqual(store.use('name')(), 'counter');
+            assert.strictEqual(store.length, 1);
+            assert.deepStrictEqual(Object.keys(store).sort(), ['length', 'name']);
+        });
+
+        it('safely exposes non-configurable function properties', () => {
+            const store = new StateStore();
+
+            assert.strictEqual(store.arguments, null);
+            assert.strictEqual(store.caller, null);
+            assert.strictEqual(typeof store.prototype, 'object');
+            assert.strictEqual('arguments' in store, true);
+            assert.strictEqual('caller' in store, true);
+            assert.strictEqual('prototype' in store, true);
         });
 
         it('returns the proxy when called without arguments', () => {
@@ -216,6 +230,20 @@ describe('StateStore', () => {
                 () => store.set({ use: 1 }),
                 /reserved StateStore key/,
             );
+        });
+
+        it('rejects non-configurable function keys without storing them', () => {
+            for (const key of ['arguments', 'caller', 'prototype']) {
+                const store = new StateStore();
+
+                assert.throws(
+                    () => {
+                        store[key] = 1;
+                    },
+                    /reserved StateStore key/,
+                );
+                assert.strictEqual(store.has(key), false);
+            }
         });
 
         it('validates set() before changing the store', () => {
