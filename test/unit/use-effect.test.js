@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'vitest';
-import { useEffect, useState } from '../src/index.js';
-import { tick } from './support.js';
+import { useEffect, useState } from '../../src/index.js';
+import { tick } from '../support/tick.js';
 
 describe('useEffect', () => {
     describe('execution', () => {

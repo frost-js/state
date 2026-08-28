@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'vitest';
-import { StateStore, useEffect } from '../src/index.js';
-import { tick } from './support.js';
+import { StateStore, useEffect } from '../../src/index.js';
+import { tick } from '../support/tick.js';
 
 describe('StateStore', () => {
     describe('proxy access', () => {

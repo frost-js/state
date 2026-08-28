@@ -24,7 +24,11 @@ Small, focused reactive state primitives for values, effects, and keyed stores. 
 npm i @fr0st/state
 ```
 
-FrostState is ESM-only. Use `import` syntax in Node and bundlers.
+FrostState's package entry point is ESM-only. Use `import` syntax in Node and bundlers.
+
+```js
+import { useEffect, useState } from '@fr0st/state';
+```
 
 ### Browser (ESM)
 
@@ -64,6 +68,8 @@ Load the bundle from your own copy or a CDN:
     count(1);
 </script>
 ```
+
+The package root resolves to the prebuilt ESM bundle. Published files under `dist/` and `src/` are also available through matching package subpaths.
 
 ## Quick Start
 
