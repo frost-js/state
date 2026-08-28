@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'mocha';
+import { describe, it } from 'vitest';
 import { StateStore, useEffect } from '../src/index.js';
 import { tick } from './support.js';
 

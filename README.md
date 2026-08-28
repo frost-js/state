@@ -1,9 +1,10 @@
 # FrostState
 
 [![CI](https://github.com/elusivecodes/FrostState/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/elusivecodes/FrostState/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/elusivecodes/FrostState/branch/main/graph/badge.svg)](https://codecov.io/gh/elusivecodes/FrostState)
 [![npm version](https://img.shields.io/npm/v/%40fr0st%2Fstate?style=flat-square)](https://www.npmjs.com/package/@fr0st/state)
 [![npm downloads](https://img.shields.io/npm/dm/%40fr0st%2Fstate?style=flat-square)](https://www.npmjs.com/package/@fr0st/state)
-[![minzipped size](https://img.shields.io/bundlejs/size/%40fr0st%2Fstate?format=minzip&style=flat-square)](https://bundlejs.com/?q=@fr0st/state)
+[![JS gzip size](https://img.badgesize.io/elusivecodes/FrostState/main/dist/frost-state.min.js?compression=gzip&label=JS%20gzip%20size&style=flat-square)](https://github.com/elusivecodes/FrostState/blob/main/dist/frost-state.min.js)
 [![license](https://img.shields.io/github/license/elusivecodes/FrostState?style=flat-square)](./LICENSE)
 
 Small, focused reactive state primitives for values, effects, and keyed stores. FrostState has zero runtime dependencies, works in Node and bundlers, and also ships a browser-friendly UMD bundle that exposes `globalThis.State`.
@@ -11,7 +12,7 @@ Small, focused reactive state primitives for values, effects, and keyed stores. 
 ## Highlights
 
 - Named exports for tree-shaking
-- Browser UMD bundle in `dist/`
+- Prebuilt ESM and UMD bundles in `dist/`
 - No runtime dependencies
 - JSDoc-powered IntelliSense
 
@@ -24,6 +25,24 @@ npm i @fr0st/state
 ```
 
 FrostState is ESM-only. Use `import` syntax in Node and bundlers.
+
+### Browser (ESM)
+
+Import the minified ESM bundle directly from a CDN:
+
+```html
+<script type="module">
+    import { useEffect, useState } from 'https://cdn.jsdelivr.net/npm/@fr0st/state@latest/dist/frost-state.esm.min.js';
+
+    const count = useState(0);
+
+    useEffect(() => {
+        console.log('count =', count());
+    });
+
+    count(1);
+</script>
+```
 
 ### Browser (UMD)
 

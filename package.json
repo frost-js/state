@@ -1,6 +1,6 @@
 {
     "name": "@fr0st/state",
-    "version": "1.0.3",
+    "version": "1.1.0",
     "description": "Small reactive state primitives for values, effects, and keyed stores.",
     "keywords": [
         "state",
@@ -26,11 +26,17 @@
     "sideEffects": false,
     "type": "module",
     "exports": {
-        ".": "./src/index.js"
+        ".": {
+            "import": "./dist/frost-state.esm.js",
+            "default": "./dist/frost-state.esm.js"
+        },
+        "./dist/*": "./dist/*",
+        "./src/*": "./src/*"
     },
-    "main": "src/index.js",
-    "jsdelivr": "dist/frost-state.min.js",
-    "unpkg": "dist/frost-state.min.js",
+    "main": "./dist/frost-state.esm.js",
+    "jsdelivr": "./dist/frost-state.min.js",
+    "unpkg": "./dist/frost-state.min.js",
+    "module": "./dist/frost-state.esm.js",
     "files": [
         "dist",
         "LICENSE",
@@ -38,18 +44,17 @@
         "src"
     ],
     "scripts": {
-        "build": "npm run bundle && npm run minify",
-        "bundle": "rollup --config",
+        "build": "vite build",
         "lint": "eslint",
-        "minify": "terser --compress passes=2 --mangle --source-map \"content=dist/frost-state.js.map,url=frost-state.min.js.map\" --output dist/frost-state.min.js dist/frost-state.js",
-        "test": "node --expose-gc ./node_modules/mocha/bin/mocha.js --forbid-only"
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
     },
     "devDependencies": {
-        "@fr0st/eslint-config": "^5.0.0",
-        "eslint": "^10.8.1",
-        "mocha": "^11.8.0",
-        "rollup": "^4.62.4",
-        "terser": "^5.50.0"
+        "@fr0st/eslint-config": "^5.0.1",
+        "@vitest/coverage-v8": "^4.1.11",
+        "eslint": "^10.9.1",
+        "vite": "^8.2.2",
+        "vitest": "^4.1.11"
     },
     "engines": {
         "node": "^20.19.0 || ^22.13.0 || >=24"
