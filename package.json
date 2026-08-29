@@ -1,6 +1,6 @@
 {
     "name": "@fr0st/state",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "description": "Small reactive state primitives for values, effects, and keyed stores.",
     "keywords": [
         "state",
@@ -12,14 +12,14 @@
         "javascript",
         "esm"
     ],
-    "homepage": "https://github.com/elusivecodes/FrostState",
+    "homepage": "https://github.com/frost-js/state",
     "bugs": {
-        "url": "https://github.com/elusivecodes/FrostState/issues",
+        "url": "https://github.com/frost-js/state/issues",
         "email": "elusivecodes@gmail.com"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/elusivecodes/FrostState.git"
+        "url": "git+https://github.com/frost-js/state.git"
     },
     "license": "MIT",
     "author": "Elusive <elusivecodes@gmail.com>",

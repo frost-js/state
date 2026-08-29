@@ -1,13 +1,13 @@
-# FrostState
+# Frost State
 
-[![CI](https://github.com/elusivecodes/FrostState/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/elusivecodes/FrostState/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/elusivecodes/FrostState/branch/main/graph/badge.svg)](https://codecov.io/gh/elusivecodes/FrostState)
+[![CI](https://github.com/frost-js/state/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/frost-js/state/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/frost-js/state/branch/main/graph/badge.svg)](https://codecov.io/gh/frost-js/state)
 [![npm version](https://img.shields.io/npm/v/%40fr0st%2Fstate?style=flat-square)](https://www.npmjs.com/package/@fr0st/state)
 [![npm downloads](https://img.shields.io/npm/dm/%40fr0st%2Fstate?style=flat-square)](https://www.npmjs.com/package/@fr0st/state)
-[![JS gzip size](https://img.badgesize.io/elusivecodes/FrostState/main/dist/frost-state.min.js?compression=gzip&label=JS%20gzip%20size&style=flat-square)](https://github.com/elusivecodes/FrostState/blob/main/dist/frost-state.min.js)
-[![license](https://img.shields.io/github/license/elusivecodes/FrostState?style=flat-square)](./LICENSE)
+[![JS gzip size](https://img.badgesize.io/frost-js/state/main/dist/frost-state.min.js?compression=gzip&label=JS%20gzip%20size&style=flat-square)](https://github.com/frost-js/state/blob/main/dist/frost-state.min.js)
+[![license](https://img.shields.io/github/license/frost-js/state?style=flat-square)](./LICENSE)
 
-Small, focused reactive state primitives for values, effects, and keyed stores. FrostState has zero runtime dependencies, works in Node and bundlers, and also ships a browser-friendly UMD bundle that exposes `globalThis.State`.
+Small, focused reactive state primitives for values, effects, and keyed stores. Frost State has zero runtime dependencies, works in Node and bundlers, and also ships a browser-friendly UMD bundle that exposes `globalThis.State`.
 
 ## Highlights
 
@@ -24,7 +24,7 @@ Small, focused reactive state primitives for values, effects, and keyed stores. 
 npm i @fr0st/state
 ```
 
-FrostState's package entry point is ESM-only. Use `import` syntax in Node and bundlers.
+Frost State's package entry point is ESM-only. Use `import` syntax in Node and bundlers.
 
 ```js
 import { useEffect, useState } from '@fr0st/state';
@@ -105,11 +105,11 @@ useEffect(() => {
 store.count = 1; // logs "count = 1"
 ```
 
-TypeScript note: FrostState is written in JavaScript and uses JSDoc types, which most editors surface as IntelliSense.
+TypeScript note: Frost State is written in JavaScript and uses JSDoc types, which most editors surface as IntelliSense.
 
 ## API
 
-FrostState exports three named APIs from `@fr0st/state`: `useState`, `useEffect`, and `StateStore`.
+Frost State exports three named APIs from `@fr0st/state`: `useState`, `useEffect`, and `StateStore`.
 
 ### `useState(value)`
 
@@ -294,4 +294,4 @@ npm run build
 
 ## License
 
-FrostState is released under the [MIT License](./LICENSE).
+Frost State is released under the [MIT License](./LICENSE).
