@@ -4,54 +4,31 @@ import { useEffect, useState } from '../../src/index.js';
 
 describe('useState', () => {
     describe('reads', () => {
-        it('reads with state()', () => {
+        it.each([
+            ['state()', (state) => state()],
+            ['state.get()', (state) => state.get()],
+            ['state.value', (state) => state.value],
+            ['Symbol.toPrimitive', Number],
+        ])('reads with %s', (_, read) => {
             const state = useState(1);
 
-            assert.strictEqual(state(), 1);
-        });
-
-        it('reads with state.get()', () => {
-            const state = useState(1);
-
-            assert.strictEqual(state.get(), 1);
-        });
-
-        it('reads with state.value', () => {
-            const state = useState(1);
-
-            assert.strictEqual(state.value, 1);
-        });
-
-        it('reads with Symbol.toPrimitive', () => {
-            const state = useState(1);
-
-            assert.strictEqual(Number(state), 1);
+            assert.strictEqual(read(state), 1);
         });
     });
 
     describe('writes', () => {
-        it('writes with state(x)', () => {
+        it.each([
+            ['state(x)', (state, value) => state(value), 2],
+            ['state.set(x)', (state, value) => state.set(value), 3],
+            ['state.value = x', (state, value) => {
+                state.value = value;
+            }, 4],
+        ])('writes with %s', (_, write, value) => {
             const state = useState(1);
 
-            state(2);
+            write(state, value);
 
-            assert.strictEqual(state(), 2);
-        });
-
-        it('writes with state.set(x)', () => {
-            const state = useState(1);
-
-            state.set(3);
-
-            assert.strictEqual(state(), 3);
-        });
-
-        it('writes with state.value = x', () => {
-            const state = useState(1);
-
-            state.value = 4;
-
-            assert.strictEqual(state(), 4);
+            assert.strictEqual(state(), value);
         });
     });
 

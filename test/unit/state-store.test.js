@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { execPath } from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, it } from 'vitest';
 import { StateStore, useEffect } from '../../src/index.js';
@@ -9,19 +10,11 @@ import { tick } from '../support/tick.js';
 describe('StateStore', () => {
     describe('proxy access', () => {
         it('constructs callable stores without string code generation', async () => {
-            const entry = new URL('../../src/index.js', import.meta.url).href;
+            const fixture = fileURLToPath(new URL('../support/no-code-generation.js', import.meta.url));
 
             await promisify(execFile)(execPath, [
                 '--disallow-code-generation-from-strings',
-                '--input-type=module',
-                '--eval',
-                `import assert from 'node:assert/strict';
-                import { StateStore } from ${JSON.stringify(entry)};
-                const store = StateStore.wrap({ count: 1 });
-                assert.ok(store instanceof StateStore);
-                assert.ok(store instanceof Function);
-                assert.equal(store('count')(), 1);
-                assert.equal(store(), store);`,
+                fixture,
             ]);
         });
 
@@ -33,21 +26,17 @@ describe('StateStore', () => {
             assert.strictEqual(store.a, 1);
         });
 
-        it('writes shallow values via proxy', () => {
-            const store = new StateStore();
-
-            store.a = 2;
-
-            assert.strictEqual(store.a, 2);
-        });
-
-        it('creates shallow values via proxy assignment', () => {
+        it('creates and updates keys via proxy assignment', () => {
             const store = new StateStore();
 
             store.a = 1;
 
             assert.strictEqual(store.a, 1);
             assert.strictEqual(store.has('a'), true);
+
+            store.a = 2;
+
+            assert.strictEqual(store.a, 2);
         });
 
         it('does not create state on symbol access', () => {
@@ -59,19 +48,11 @@ describe('StateStore', () => {
             assert.strictEqual(store.has('Symbol(Symbol.iterator)'), false);
         });
 
-        it('does not create state on missing property read', () => {
+        it.each(['missing', '_state'])('does not create state when reading "%s"', (key) => {
             const store = new StateStore();
 
-            assert.strictEqual(store.missing, undefined);
-            assert.strictEqual(store.has('missing'), false);
-            assert.deepStrictEqual(Object.keys(store), []);
-        });
-
-        it('does not expose internal-looking keys by default', () => {
-            const store = new StateStore();
-
-            assert.strictEqual(store._state, undefined);
-            assert.strictEqual(store.has('_state'), false);
+            assert.strictEqual(store[key], undefined);
+            assert.strictEqual(store.has(key), false);
             assert.deepStrictEqual(Object.keys(store), []);
         });
 
@@ -146,48 +127,33 @@ describe('StateStore', () => {
     });
 
     describe('introspection', () => {
-        it('rejects integrity changes without damaging the store', () => {
-            for (const lock of [Object.preventExtensions, Object.seal, Object.freeze]) {
-                for (const initial of [{}, { count: 1 }]) {
-                    const store = StateStore.wrap(initial);
+        it.each([
+            ['preventExtensions on an empty store', Object.preventExtensions, {}],
+            ['preventExtensions on a populated store', Object.preventExtensions, { count: 1 }],
+            ['seal on an empty store', Object.seal, {}],
+            ['seal on a populated store', Object.seal, { count: 1 }],
+            ['freeze on an empty store', Object.freeze, {}],
+            ['freeze on a populated store', Object.freeze, { count: 1 }],
+        ])('rejects %s without damaging it', (_, lock, initial) => {
+            const store = StateStore.wrap(initial);
 
-                    assert.throws(() => lock(store), TypeError);
-                    assert.strictEqual(Object.isExtensible(store), true);
-                    assert.strictEqual(Reflect.preventExtensions(store), false);
+            assert.throws(() => lock(store), TypeError);
+            assert.strictEqual(Object.isExtensible(store), true);
+            assert.strictEqual(Reflect.preventExtensions(store), false);
 
-                    store.count = 2;
-                    assert.deepStrictEqual(Object.keys(store), ['count']);
-                    assert.strictEqual(store.count, 2);
-                }
-            }
+            store.count = 2;
+            assert.deepStrictEqual(Object.keys(store), ['count']);
+            assert.strictEqual(store.count, 2);
         });
 
-        it('supports has() for existing keys', () => {
-            const store = new StateStore();
+        it.each([
+            ['existing', { a: 1 }, true],
+            ['missing', {}, false],
+        ])('reports %s keys through has() and "in"', (_, initial, expected) => {
+            const store = StateStore.wrap(initial);
 
-            store.set({ a: 1 });
-
-            assert.strictEqual(store.has('a'), true);
-        });
-
-        it('supports has() for missing keys', () => {
-            const store = new StateStore();
-
-            assert.strictEqual(store.has('b'), false);
-        });
-
-        it('supports the "in" operator for existing keys', () => {
-            const store = new StateStore();
-
-            store.set({ a: 1 });
-
-            assert.strictEqual('a' in store, true);
-        });
-
-        it('supports the "in" operator for missing keys', () => {
-            const store = new StateStore();
-
-            assert.strictEqual('b' in store, false);
+            assert.strictEqual(store.has('a'), expected);
+            assert.strictEqual('a' in store, expected);
         });
 
         it('supports the "in" operator for store methods', () => {
@@ -198,26 +164,15 @@ describe('StateStore', () => {
             assert.strictEqual('_state' in store, false);
         });
 
-        it('iterates keys with keys()', () => {
+        it.each([
+            ['keys()', (store) => Array.from(store.keys())],
+            ['Object.keys()', Object.keys],
+        ])('enumerates stored keys with %s', (_, keys) => {
             const store = new StateStore();
 
             store.set({ a: 1, b: 2 });
 
-            assert.deepStrictEqual(
-                Array.from(store.keys()).sort(),
-                ['a', 'b'],
-            );
-        });
-
-        it('returns keys via Object.keys()', () => {
-            const store = new StateStore();
-
-            store.set({ a: 1, b: 2 });
-
-            assert.deepStrictEqual(
-                Object.keys(store).sort(),
-                ['a', 'b'],
-            );
+            assert.deepStrictEqual(keys(store).sort(), ['a', 'b']);
         });
 
         it('does not track values while enumerating keys', async () => {
@@ -258,26 +213,25 @@ describe('StateStore', () => {
             effect.stop();
         });
 
-        it('restores deleted keys through previously returned accessors', () => {
-            for (const write of [
-                (state) => state(2),
-                (state) => state.set(2),
-                (state) => {
-                    state.value = 2;
-                },
-                (state) => state(undefined),
-            ]) {
-                const store = StateStore.wrap({ count: 1 });
-                const state = store.use('count');
+        it.each([
+            ['state(2)', (state) => state(2), 2],
+            ['state.set(2)', (state) => state.set(2), 2],
+            ['state.value = 2', (state) => {
+                state.value = 2;
+            }, 2],
+            ['state(undefined)', (state) => state(undefined), undefined],
+        ])('restores a deleted key through %s on its existing accessor', (_, write, expected) => {
+            const store = StateStore.wrap({ count: 1 });
+            const state = store.use('count');
 
-                delete store.count;
-                assert.strictEqual(store.has('count'), false);
-                write(state);
+            delete store.count;
+            assert.strictEqual(store.has('count'), false);
+            write(state);
 
-                assert.strictEqual(store.has('count'), true);
-                assert.strictEqual(store.count, state());
-                assert.deepStrictEqual(Object.keys(store), ['count']);
-            }
+            assert.strictEqual(store.has('count'), true);
+            assert.strictEqual(store.count, expected);
+            assert.strictEqual(state(), expected);
+            assert.deepStrictEqual(Object.keys(store), ['count']);
         });
 
         it('handles missing, reserved, and symbol deletions', () => {
@@ -322,70 +276,58 @@ describe('StateStore', () => {
             effect.stop();
         });
 
-        it('rejects unsupported descriptors without changing state', () => {
+        it.each([
+            ['non-configurable', { value: 2, configurable: false }],
+            ['non-enumerable', { value: 2, enumerable: false }],
+            ['non-writable', { value: 2, writable: false }],
+            ['getter', { get: () => 2 }],
+            ['setter', { set: () => {} }],
+        ])('rejects a %s descriptor without changing state', (_, descriptor) => {
             const store = StateStore.wrap({ count: 1 });
 
-            for (const descriptor of [
-                { value: 2, configurable: false },
-                { value: 2, enumerable: false },
-                { value: 2, writable: false },
-                { get: () => 2 },
-                { set: () => {} },
-            ]) {
-                assert.strictEqual(Reflect.defineProperty(store, 'count', descriptor), false);
-                assert.strictEqual(store.count, 1);
-                assert.strictEqual(store.use('count')(), 1);
-            }
+            assert.strictEqual(Reflect.defineProperty(store, 'count', descriptor), false);
+            assert.strictEqual(store.count, 1);
+            assert.strictEqual(store.use('count')(), 1);
+        });
+
+        it('rejects incomplete descriptors for new keys', () => {
+            const store = new StateStore();
 
             assert.strictEqual(Reflect.defineProperty(store, 'missing', { value: 2 }), false);
             assert.strictEqual(store.has('missing'), false);
+        });
+
+        it('rejects redefining reserved methods', () => {
+            const store = new StateStore();
+
             assert.strictEqual(Reflect.defineProperty(store, 'use', { value: 2 }), false);
             assert.strictEqual(typeof store.use, 'function');
         });
     });
 
     describe('reserved keys', () => {
-        it('rejects reserved keys via use()', () => {
+        it.each([
+            ['use()', (store) => store.use('use', 1)],
+            ['proxy assignment', (store) => {
+                store.use = 1;
+            }],
+            ['set()', (store) => store.set({ use: 1 })],
+        ])('rejects reserved keys via %s', (_, write) => {
             const store = new StateStore();
 
-            assert.throws(
-                () => store.use('use', 1),
-                /reserved StateStore key/,
-            );
+            assert.throws(() => write(store), /reserved StateStore key/);
         });
 
-        it('rejects reserved keys via proxy assignment', () => {
+        it.each(['arguments', 'caller', 'prototype'])('rejects "%s" without storing it', (key) => {
             const store = new StateStore();
 
             assert.throws(
                 () => {
-                    store.use = 1;
+                    store[key] = 1;
                 },
                 /reserved StateStore key/,
             );
-        });
-
-        it('rejects reserved keys via set()', () => {
-            const store = new StateStore();
-
-            assert.throws(
-                () => store.set({ use: 1 }),
-                /reserved StateStore key/,
-            );
-        });
-
-        it('rejects non-configurable function keys without storing them', () => {
-            for (const key of ['arguments', 'caller', 'prototype']) {
-                const store = new StateStore();
-
-                assert.throws(
-                    () => {
-                        store[key] = 1;
-                    },
-                    /reserved StateStore key/,
-                );
-                assert.strictEqual(store.has(key), false);
-            }
+            assert.strictEqual(store.has(key), false);
         });
 
         it('validates set() before changing the store', () => {
@@ -410,26 +352,12 @@ describe('StateStore', () => {
     });
 
     describe('value handling', () => {
-        it('handles array values as plain values', () => {
+        it.each([
+            ['array', [1, 2, 3]],
+            ['null', null],
+            ['Date', new Date(0)],
+        ])('handles %s values as plain values', (_, value) => {
             const store = new StateStore();
-            const arr = [1, 2, 3];
-
-            store.set({ a: arr });
-
-            assert.strictEqual(store.a, arr);
-        });
-
-        it('handles null values as plain values', () => {
-            const store = new StateStore();
-
-            store.set({ a: null });
-
-            assert.strictEqual(store.a, null);
-        });
-
-        it('handles Date values as plain values', () => {
-            const store = new StateStore();
-            const value = new Date();
 
             store.set({ a: value });
 
@@ -447,37 +375,24 @@ describe('StateStore', () => {
     });
 
     describe('wrap', () => {
-        it('creates a nested store', () => {
+        it('creates a readable and writable nested store', () => {
             const store = new StateStore();
 
             store.set({ a: StateStore.wrap({ b: 1 }) });
 
             assert.ok(store.a instanceof StateStore);
-        });
-
-        it('reads nested values via proxy', () => {
-            const store = new StateStore();
-
-            store.set({ a: StateStore.wrap({ b: 1 }) });
-
             assert.strictEqual(store.a.b, 1);
-        });
 
-        it('writes nested values via proxy', () => {
-            const store = new StateStore();
-
-            store.set({ a: StateStore.wrap({ b: 1 }) });
             store.a.b = 2;
 
             assert.strictEqual(store.a.b, 2);
         });
 
-        it('returns non-plain values as-is', () => {
-            const date = new Date();
-            const arr = [1, 2, 3];
-
-            assert.strictEqual(StateStore.wrap(date), date);
-            assert.strictEqual(StateStore.wrap(arr), arr);
+        it.each([
+            ['Date', new Date(0)],
+            ['array', [1, 2, 3]],
+        ])('returns %s values as-is', (_, value) => {
+            assert.strictEqual(StateStore.wrap(value), value);
         });
 
         it('detects plain objects by prototype', () => {
@@ -572,36 +487,6 @@ describe('StateStore', () => {
             assert.strictEqual(merged.a, 1);
         });
 
-        it('reuses nested stores on subsequent merge calls', () => {
-            const store = new StateStore();
-
-            StateStore.merge(store, { a: { b: 1 } }, { deep: true });
-            const first = store.a;
-
-            StateStore.merge(store, { a: { c: 2 } }, { deep: true });
-            const second = store.a;
-
-            assert.strictEqual(first, second);
-        });
-
-        it('preserves existing nested values', () => {
-            const store = new StateStore();
-
-            StateStore.merge(store, { a: { b: 1 } }, { deep: true });
-            StateStore.merge(store, { a: { c: 2 } }, { deep: true });
-
-            assert.strictEqual(store.a.b, 1);
-        });
-
-        it('adds new nested values', () => {
-            const store = new StateStore();
-
-            StateStore.merge(store, { a: { b: 1 } }, { deep: true });
-            StateStore.merge(store, { a: { c: 2 } }, { deep: true });
-
-            assert.strictEqual(store.a.c, 2);
-        });
-
         it('overwrites nested stores with non-objects', () => {
             const store = new StateStore();
 
@@ -611,7 +496,7 @@ describe('StateStore', () => {
             assert.strictEqual(store.a, 3);
         });
 
-        it('deep merges into existing nested stores', () => {
+        it('reuses nested stores while preserving existing values and adding new ones', () => {
             const store = new StateStore();
 
             StateStore.merge(store, { a: { b: 1 } }, { deep: true });
