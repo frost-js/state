@@ -102,7 +102,7 @@ useEffect(() => {
     console.log('count =', store.count);
 });
 
-store.count = 1; // logs "count = 1"
+store.count = 1; // logs "count = 1" on the next microtask
 ```
 
 TypeScript note: Frost State is written in JavaScript and uses JSDoc types, which most editors surface as IntelliSense.
@@ -126,7 +126,11 @@ The returned accessor supports:
 - `state.get(markEffects = true)`: read the current value, optionally without effect tracking
 - `state.set(next)`: write the current value
 - `state.value`: read or write the current value
-- `state.previous`: read the previous value after the last successful change
+- `state.previous`: read the previous value after the last successful change; initially `undefined`
+
+Writes use `Object.is` to detect changes. Writing the same value leaves `previous`
+unchanged and does not schedule effects. Mutating an object or array in place does
+not trigger an update; assign a different reference to notify effects.
 
 ```js
 import { useState } from '@fr0st/state';
@@ -145,8 +149,9 @@ state.previous; // 'again'
 
 ### `useEffect(callback, options)`
 
-Runs an effect immediately, tracks the states read during that run, and schedules
-re-runs when any of those states change.
+Runs an effect immediately, tracks the states read synchronously during that run,
+and schedules re-runs when any of those states change. Reads after an `await` or
+inside a later callback are not tracked by that run.
 
 ```js
 const effect = useEffect(callback, options);
@@ -154,7 +159,10 @@ const effect = useEffect(callback, options);
 
 Options:
 
-- `options.weak`: use a `WeakRef`-backed runner
+- `options.weak` (default `false`): use a `WeakRef`-backed runner
+
+With `weak: true`, keep a reference to the returned runner for as long as the effect
+should remain active. Otherwise, it may be garbage-collected.
 
 The returned runner supports:
 
@@ -180,8 +188,8 @@ effect.stop();
 ### `StateStore`
 
 Creates a callable, proxy-backed keyed store for state accessors. Property reads
-return existing keys, property assignment writes keys, and missing property reads
-return `undefined`. Effects that read missing keys subscribe to later assignment
+return stored values, property assignment writes keys, and missing string-key reads
+return `undefined`. Effects that read missing keys subscribe to later value changes
 without exposing those keys through enumeration.
 
 ```js
@@ -195,12 +203,17 @@ The returned store supports:
 
 - `store.key`: read an existing key
 - `store.key = value`: write a key
-- `delete store.key`: remove a key and notify effects that read its value
+- `delete store.key`: remove a key and reset its accessor to `undefined`
 - `store.use(key, defaultValue)`: retrieve or create a state accessor
 - `store(key, defaultValue)`: retrieve or create a state accessor through the callable form
+- `store()`: return the store itself
 - `store.set(object)`: set top-level keys from an object
 - `store.has(key)`: check whether a key exists
 - `store.keys()`: iterate stored keys
+
+State keys are strings. Defaults apply when a key is created or restored after
+deletion; existing keys retain their values. Symbol properties are ordinary,
+nonreactive properties and are excluded from `store.keys()`.
 
 ```js
 import { StateStore, useEffect } from '@fr0st/state';
@@ -214,17 +227,63 @@ useEffect(() => {
     console.log(store.label, count());
 });
 
-count(1); // logs "Clicks 1"
-store.count = 2; // logs "Clicks 2"
+count(1);
+store.count = 2; // logs "Clicks 2" once on the next microtask
 
 store.has('count'); // true
 Array.from(store.keys()); // ['count', 'label']
+```
+
+Deletion preserves the accessor so effects and previously returned accessors stay
+connected to the key:
+
+```js
+import { StateStore } from '@fr0st/state';
+
+const store = StateStore.wrap({ count: 1 });
+const count = store('count');
+
+delete store.count;
+store.has('count'); // false
+count(); // undefined
+
+count(2); // restores the key
+store.count; // 2
+store.has('count'); // true
+```
+
+String state keys support data-property definitions with `configurable`,
+`enumerable`, and `writable` all enabled. New keys must explicitly enable these
+attributes; updates may omit unchanged attributes:
+
+```js
+import { StateStore } from '@fr0st/state';
+
+const store = new StateStore();
+
+Object.defineProperty(store, 'count', {
+    value: 1,
+    configurable: true,
+    enumerable: true,
+    writable: true,
+});
+
+Object.defineProperty(store, 'count', { value: 2 }); // notifies effects normally
+store.count; // 2
 ```
 
 #### Static helpers
 
 - `StateStore.wrap(value, options)`: wrap a plain object in a store
 - `StateStore.merge(store, value, options)`: merge plain-object data into a store
+
+Both helpers accept `options.deep` (default `false`) to process nested plain objects.
+`wrap` returns an existing `StateStore` unchanged. For plain-object data, `merge`
+updates and returns the target store. Non-plain input values are returned unchanged
+by either helper; `merge` leaves the target unchanged in that case.
+
+`merge` requires a `StateStore` target by default. Set `options.allowFallback` to
+`true` to call `wrap(value, options)` when the target is not a store.
 
 ```js
 import { StateStore } from '@fr0st/state';
@@ -273,20 +332,22 @@ Deep wrapping and merging preserve cycles and shared plain-object references.
 
 ## Behavior Notes
 
-- `useEffect()` tracks only the states read during the latest successful run.
+- `useEffect()` tracks only the states read synchronously during the latest successful run. A failed rerun retains the previous subscriptions; a failed initial run releases them.
 - `useEffect()` coalesces normal re-runs in a microtask.
 - `effect.sync()` runs immediately and cancels a pending re-run.
 - `effect.stop()` permanently cancels the effect and releases its subscriptions.
-- `store.set(...)` assigns top-level keys only. Nested plain objects remain plain values.
+- `store.set(...)` assigns own enumerable string keys at the top level only. Nested plain objects remain plain values.
 - Use `StateStore.wrap(..., { deep: true })` or `StateStore.merge(..., { deep: true })` for nested reactive stores.
-- Deep wrap and merge preserve cycles and shared references.
+- Deep wrap and merge preserve cycles and shared references in the incoming plain-object data.
 - Deep merge separates existing shared stores when distinct incoming objects update them, preserving their pre-merge values in each branch.
 - Arrays, dates, class instances, and null-prototype objects are treated as plain values rather than nested stores.
-- Missing property reads such as `store.missing` return `undefined`. Reads made during effect tracking still subscribe to later assignment without exposing the key.
-- Deleting a key resets its accessor to `undefined` and hides the key. Writing through a previously returned accessor restores it.
-- `Object.defineProperty` supports enumerable, writable, configurable data properties. New keys must explicitly enable all three attributes; updates may omit unchanged attributes. Accessor properties and restrictive descriptors are rejected without changing the store.
-- Stores must remain extensible. `Object.preventExtensions`, `Object.seal`, and `Object.freeze` throw without changing the store.
-- API keys such as `use`, `set`, `has`, and `keys`, along with the non-configurable Function keys `arguments`, `caller`, and `prototype`, are reserved and cannot be used as state keys.
+- Missing property reads such as `store.missing` return `undefined`. Reads made during effect tracking still subscribe to later value changes without exposing the key.
+- `store.has(key)`, `key in store`, `store.keys()`, and `Object.keys(store)` do not create effect subscriptions. Read a key's value to track it.
+- Deleting a key resets its accessor to `undefined` and hides the key. Effects are scheduled when that changes the value. Writing through a previously returned accessor restores the key, including writes of `undefined`.
+- For string state keys, accessor properties and restrictive descriptors are rejected without changing the key. `Object.defineProperty` throws; `Reflect.defineProperty` returns `false`.
+- Stores must remain extensible. `Object.preventExtensions`, `Object.seal`, and `Object.freeze` throw without changing the store. `Reflect.preventExtensions` returns `false`.
+- `constructor`, `use`, `set`, `has`, `keys`, `arguments`, `caller`, and `prototype` are reserved and cannot be used as state keys. `name` and `length` are valid state keys.
+- Callable stores work with string code generation disabled.
 - Weak effects rely on `WeakRef`.
 
 ## Development
