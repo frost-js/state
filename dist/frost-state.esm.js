@@ -1,3 +1,18 @@
+//#region src/callable.js
+/**
+* Creates a callable instance without runtime code generation.
+* Returning a function lets subclasses initialize their fields on it.
+*/
+var Callable = class extends Function {
+	/**
+	* Creates a function with the subclass prototype.
+	*/
+	constructor() {
+		return Object.setPrototypeOf(function() {}, new.target.prototype);
+	}
+};
+
+//#endregion
 //#region src/helpers.js
 /**
 * Checks whether a value has `Object.prototype`.
@@ -128,6 +143,16 @@ function useEffect(callback, { weak = false } = {}) {
 * @returns {StateAccessor<T>} The state accessor.
 */
 function useState(value) {
+	return createState(value);
+}
+/**
+* Creates a state accessor with an optional hook before every write.
+* @template T
+* @param {T} value The initial state value.
+* @param {Function} [onWrite] The hook, including writes of an unchanged value.
+* @returns {StateAccessor<T>} The state accessor.
+*/
+function createState(value, onWrite) {
 	let previous;
 	const effects = /* @__PURE__ */ new Set();
 	const get = (markEffects = true) => {
@@ -142,6 +167,7 @@ function useState(value) {
 		return value;
 	};
 	const set = (newValue) => {
+		onWrite?.();
 		if (Object.is(value, newValue)) return;
 		previous = value;
 		value = newValue;
@@ -179,7 +205,7 @@ function useState(value) {
 * API keys and non-configurable Function keys are reserved and cannot be used
 * as state keys.
 */
-var StateStore = class StateStore extends Function {
+var StateStore = class StateStore extends Callable {
 	#state = /* @__PURE__ */ new Map();
 	#visibleKeys = /* @__PURE__ */ new Set();
 	/**
@@ -221,22 +247,50 @@ var StateStore = class StateStore extends Function {
 		return StateStore.#mergeValue(void 0, value, Boolean(options.deep), /* @__PURE__ */ new WeakMap());
 	}
 	/**
+	* Copies an existing store graph using values from before the merge.
+	* @param {*} store The value to copy; non-store values retain their identity.
+	* @param {WeakMap<StateStore, Array<[string, *]>>} snapshots The original store entries.
+	* @param {WeakMap<StateStore, StateStore>} [clones] The stores already copied.
+	* @returns {*} The copied store or original value.
+	*/
+	static #cloneStore(store, snapshots, clones = /* @__PURE__ */ new WeakMap()) {
+		if (!(store instanceof StateStore)) return store;
+		if (clones.has(store)) return clones.get(store);
+		const clone = new StateStore();
+		clones.set(store, clone);
+		for (const [key, value] of snapshots.get(store) ?? StateStore.#entries(store)) clone[key] = StateStore.#cloneStore(value, snapshots, clones);
+		return clone;
+	}
+	/**
+	* Reads stored values without tracking effects.
+	* @param {StateStore} store The store to read.
+	* @returns {Array<[string, *]>} The stored entries.
+	*/
+	static #entries(store) {
+		return Array.from(store.keys(), (key) => [key, store.use(key).get(false)]);
+	}
+	/**
 	* Wraps or merges a plain-object value while preserving cycles and shared references.
 	* @template T
 	* @param {*} store The existing value that may be reused as the target store.
 	* @param {T} value The value to wrap or merge.
 	* @param {boolean} deep Whether to process nested plain objects recursively.
 	* @param {WeakMap<object, StateStore>} stores The previously visited source objects and their stores.
+	* @param {WeakMap<StateStore, Array<[string, *]>>} [snapshots] Store values before merging, used when splitting aliases.
 	* @returns {StateStore|T} The merged store, or the original non-plain value.
 	*/
-	static #mergeValue(store, value, deep, stores) {
+	static #mergeValue(store, value, deep, stores, snapshots = /* @__PURE__ */ new WeakMap()) {
 		if (!isPlainObject(value)) return value;
 		if (stores.has(value)) return stores.get(value);
-		const target = store instanceof StateStore ? store : new StateStore();
+		let target = store instanceof StateStore ? store : new StateStore();
+		if (deep) {
+			if (snapshots.has(target)) target = StateStore.#cloneStore(target, snapshots);
+			snapshots.set(target, StateStore.#entries(target));
+		}
 		stores.set(value, target);
 		for (const [key, val] of Object.entries(value)) {
 			const current = target.has(key) ? target.use(key).get(false) : void 0;
-			target[key] = deep ? StateStore.#mergeValue(current, val, true, stores) : val;
+			target[key] = deep ? StateStore.#mergeValue(current, val, true, stores, snapshots) : val;
 		}
 		return target;
 	}
@@ -245,14 +299,33 @@ var StateStore = class StateStore extends Function {
 	*/
 	constructor() {
 		super();
-		for (const key of Reflect.ownKeys(this)) {
-			if (typeof key !== "string") continue;
-			if (Reflect.getOwnPropertyDescriptor(this, key)?.configurable) Reflect.deleteProperty(this, key);
-		}
+		Object.defineProperties(this, {
+			arguments: { value: null },
+			caller: { value: null }
+		});
+		delete this.name;
+		delete this.length;
 		const proxy = new Proxy(this, {
 			apply(target, thisArg, args) {
 				if (!args.length) return proxy;
 				return target.use(...args);
+			},
+			defineProperty(target, prop, descriptor) {
+				if (typeof prop === "symbol") return Reflect.defineProperty(target, prop, descriptor);
+				if (target.#isReservedStateKey(prop)) return false;
+				if ("get" in descriptor || "set" in descriptor) return false;
+				const exists = target.has(prop);
+				const { configurable = exists, enumerable = exists, writable = exists } = descriptor;
+				if (!configurable || !enumerable || !writable) return false;
+				if ("value" in descriptor || !exists) target.#assignKey(prop, descriptor.value);
+				return true;
+			},
+			deleteProperty(target, prop) {
+				if (typeof prop === "symbol") return Reflect.deleteProperty(target, prop);
+				if (target.#isReservedStateKey(prop)) return false;
+				target.#state.get(prop)?.set(void 0);
+				target.#visibleKeys.delete(prop);
+				return true;
 			},
 			get(target, prop) {
 				if (typeof prop === "symbol") return Reflect.get(target, prop, target);
@@ -281,6 +354,9 @@ var StateStore = class StateStore extends Function {
 				const baseKeys = Reflect.ownKeys(target);
 				const stateKeys = target.keys();
 				return Array.from(/* @__PURE__ */ new Set([...baseKeys, ...stateKeys]));
+			},
+			preventExtensions() {
+				return false;
 			},
 			set(target, prop, value) {
 				if (typeof prop === "symbol") return Reflect.set(target, prop, value, target);
@@ -335,8 +411,7 @@ var StateStore = class StateStore extends Function {
 			}
 			return state;
 		}
-		const state = useState(defaultValue);
-		this.#state.set(key, state);
+		const state = this.#createState(key, defaultValue);
 		this.#visibleKeys.add(key);
 		return state;
 	}
@@ -347,15 +422,19 @@ var StateStore = class StateStore extends Function {
 	* @throws {TypeError} If `key` is reserved by `StateStore`.
 	*/
 	#assignKey(key, value) {
-		if (this.#isReservedStateKey(key)) throw new TypeError(`"${key}" is a reserved StateStore key`);
-		if (this.#state.has(key)) {
-			this.#visibleKeys.add(key);
-			this.#state.get(key).value = value;
-			return;
-		}
-		const state = useState(value);
+		this.use(key).set(value);
+	}
+	/**
+	* Creates an accessor that exposes its key whenever it is written.
+	* @template T
+	* @param {string} key The state key.
+	* @param {T} value The initial state value.
+	* @returns {StateAccessor<T>} The state accessor.
+	*/
+	#createState(key, value) {
+		const state = createState(value, () => this.#visibleKeys.add(key));
 		this.#state.set(key, state);
-		this.#visibleKeys.add(key);
+		return state;
 	}
 	/**
 	* Checks whether a key belongs to the store API or a non-configurable Function property.
@@ -364,7 +443,7 @@ var StateStore = class StateStore extends Function {
 	*/
 	#isReservedStateKey(key) {
 		if (typeof key !== "string") return false;
-		if (Object.prototype.hasOwnProperty.call(StateStore.prototype, key)) return true;
+		if (Object.hasOwn(StateStore.prototype, key)) return true;
 		return Reflect.getOwnPropertyDescriptor(this, key)?.configurable === false;
 	}
 	/**
@@ -375,9 +454,7 @@ var StateStore = class StateStore extends Function {
 	#readKey(key) {
 		if (this.#state.has(key)) return this.#state.get(key).value;
 		if (!isTrackingEffects()) return;
-		const state = useState(void 0);
-		this.#state.set(key, state);
-		return state.value;
+		return this.#createState(key, void 0).value;
 	}
 };
 

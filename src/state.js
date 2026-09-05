@@ -176,6 +176,17 @@ export function useEffect(callback, { weak = false } = {}) {
  * @returns {StateAccessor<T>} The state accessor.
  */
 export function useState(value) {
+    return createState(value);
+};
+
+/**
+ * Creates a state accessor with an optional hook before every write.
+ * @template T
+ * @param {T} value The initial state value.
+ * @param {Function} [onWrite] The hook, including writes of an unchanged value.
+ * @returns {StateAccessor<T>} The state accessor.
+ */
+export function createState(value, onWrite) {
     let previous;
     const effects = new Set();
 
@@ -194,6 +205,8 @@ export function useState(value) {
     };
 
     const set = (newValue) => {
+        onWrite?.();
+
         if (Object.is(value, newValue)) {
             return;
         }

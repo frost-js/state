@@ -1,10 +1,30 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { execPath } from 'node:process';
+import { promisify } from 'node:util';
 import { describe, it } from 'vitest';
 import { StateStore, useEffect } from '../../src/index.js';
 import { tick } from '../support/tick.js';
 
 describe('StateStore', () => {
     describe('proxy access', () => {
+        it('constructs callable stores without string code generation', async () => {
+            const entry = new URL('../../src/index.js', import.meta.url).href;
+
+            await promisify(execFile)(execPath, [
+                '--disallow-code-generation-from-strings',
+                '--input-type=module',
+                '--eval',
+                `import assert from 'node:assert/strict';
+                import { StateStore } from ${JSON.stringify(entry)};
+                const store = StateStore.wrap({ count: 1 });
+                assert.ok(store instanceof StateStore);
+                assert.ok(store instanceof Function);
+                assert.equal(store('count')(), 1);
+                assert.equal(store(), store);`,
+            ]);
+        });
+
         it('reads shallow values via proxy', () => {
             const store = new StateStore();
 
@@ -126,6 +146,22 @@ describe('StateStore', () => {
     });
 
     describe('introspection', () => {
+        it('rejects integrity changes without damaging the store', () => {
+            for (const lock of [Object.preventExtensions, Object.seal, Object.freeze]) {
+                for (const initial of [{}, { count: 1 }]) {
+                    const store = StateStore.wrap(initial);
+
+                    assert.throws(() => lock(store), TypeError);
+                    assert.strictEqual(Object.isExtensible(store), true);
+                    assert.strictEqual(Reflect.preventExtensions(store), false);
+
+                    store.count = 2;
+                    assert.deepStrictEqual(Object.keys(store), ['count']);
+                    assert.strictEqual(store.count, 2);
+                }
+            }
+        });
+
         it('supports has() for existing keys', () => {
             const store = new StateStore();
 
@@ -199,6 +235,112 @@ describe('StateStore', () => {
             await tick();
 
             assert.strictEqual(runs, 1);
+        });
+    });
+
+    describe('property operations', () => {
+        it('deletes keys reactively and preserves subscriptions on reassignment', async () => {
+            const store = StateStore.wrap({ count: 1 });
+            const values = [];
+            const effect = useEffect(() => values.push(store.count));
+
+            assert.strictEqual(delete store.count, true);
+            assert.strictEqual(store.count, undefined);
+            assert.strictEqual(store.has('count'), false);
+            assert.strictEqual('count' in store, false);
+            assert.deepStrictEqual(Object.keys(store), []);
+            await tick();
+
+            store.count = 2;
+            await tick();
+
+            assert.deepStrictEqual(values, [1, undefined, 2]);
+            effect.stop();
+        });
+
+        it('restores deleted keys through previously returned accessors', () => {
+            for (const write of [
+                (state) => state(2),
+                (state) => state.set(2),
+                (state) => {
+                    state.value = 2;
+                },
+                (state) => state(undefined),
+            ]) {
+                const store = StateStore.wrap({ count: 1 });
+                const state = store.use('count');
+
+                delete store.count;
+                assert.strictEqual(store.has('count'), false);
+                write(state);
+
+                assert.strictEqual(store.has('count'), true);
+                assert.strictEqual(store.count, state());
+                assert.deepStrictEqual(Object.keys(store), ['count']);
+            }
+        });
+
+        it('handles missing, reserved, and symbol deletions', () => {
+            const store = new StateStore();
+            const symbol = Symbol('metadata');
+
+            store[symbol] = 1;
+
+            assert.strictEqual(delete store.missing, true);
+            assert.strictEqual(delete store[symbol], true);
+            assert.strictEqual(symbol in store, false);
+            assert.strictEqual(Reflect.deleteProperty(store, 'use'), false);
+            assert.strictEqual(Reflect.deleteProperty(store, 'prototype'), false);
+            assert.strictEqual(typeof store.use, 'function');
+        });
+
+        it('defines data properties through reactive state', async () => {
+            const store = new StateStore();
+            const values = [];
+            const effect = useEffect(() => values.push(store.count));
+
+            Object.defineProperty(store, 'count', {
+                value: 1,
+                configurable: true,
+                enumerable: true,
+                writable: true,
+            });
+            await tick();
+
+            Object.defineProperty(store, 'count', { value: 2 });
+            await tick();
+
+            assert.strictEqual(store.count, 2);
+            assert.strictEqual(store.use('count')(), 2);
+            assert.deepStrictEqual(Object.getOwnPropertyDescriptor(store, 'count'), {
+                value: 2,
+                configurable: true,
+                enumerable: true,
+                writable: true,
+            });
+            assert.deepStrictEqual(values, [undefined, 1, 2]);
+            effect.stop();
+        });
+
+        it('rejects unsupported descriptors without changing state', () => {
+            const store = StateStore.wrap({ count: 1 });
+
+            for (const descriptor of [
+                { value: 2, configurable: false },
+                { value: 2, enumerable: false },
+                { value: 2, writable: false },
+                { get: () => 2 },
+                { set: () => {} },
+            ]) {
+                assert.strictEqual(Reflect.defineProperty(store, 'count', descriptor), false);
+                assert.strictEqual(store.count, 1);
+                assert.strictEqual(store.use('count')(), 1);
+            }
+
+            assert.strictEqual(Reflect.defineProperty(store, 'missing', { value: 2 }), false);
+            assert.strictEqual(store.has('missing'), false);
+            assert.strictEqual(Reflect.defineProperty(store, 'use', { value: 2 }), false);
+            assert.strictEqual(typeof store.use, 'function');
         });
     });
 
@@ -381,6 +523,41 @@ describe('StateStore', () => {
     });
 
     describe('merge', () => {
+        it('separates conflicting updates to an existing shared store', () => {
+            const shared = { count: 0, nested: { kept: true, value: 0 } };
+            const store = StateStore.wrap({ a: shared, b: shared }, { deep: true });
+            const first = store.a;
+
+            StateStore.merge(store, {
+                a: { count: 1, nested: { value: 1 }, added: true },
+                b: { count: 2 },
+            }, { deep: true });
+
+            assert.strictEqual(store.a, first);
+            assert.notStrictEqual(store.a, store.b);
+            assert.strictEqual(store.a.count, 1);
+            assert.strictEqual(store.b.count, 2);
+            assert.strictEqual(store.a.nested.value, 1);
+            assert.strictEqual(store.b.nested.value, 0);
+            assert.strictEqual(store.b.nested.kept, true);
+            assert.strictEqual(store.b.has('added'), false);
+        });
+
+        it('separates nested updates from an existing root cycle', () => {
+            const source = { count: 0 };
+
+            source.self = source;
+
+            const store = StateStore.wrap(source, { deep: true });
+
+            StateStore.merge(store, { count: 1, self: { count: 2 } }, { deep: true });
+
+            assert.strictEqual(store.count, 1);
+            assert.strictEqual(store.self.count, 2);
+            assert.notStrictEqual(store.self, store);
+            assert.strictEqual(store.self.self, store.self);
+        });
+
         it('throws when the existing value is not a store', () => {
             assert.throws(
                 () => StateStore.merge(null, { a: 1 }),

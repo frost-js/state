@@ -1,7 +1,8 @@
 /** @import { StateAccessor } from './state.js' */
 
+import Callable from './callable.js';
 import { isPlainObject } from './helpers.js';
-import { isTrackingEffects, useState } from './state.js';
+import { createState, isTrackingEffects } from './state.js';
 
 /**
  * Creates a callable, proxy-backed keyed reactive store.
@@ -12,7 +13,7 @@ import { isTrackingEffects, useState } from './state.js';
  * API keys and non-configurable Function keys are reserved and cannot be used
  * as state keys.
  */
-export default class StateStore extends Function {
+export default class StateStore extends Callable {
     #state = new Map();
     #visibleKeys = new Set();
 
@@ -71,15 +72,52 @@ export default class StateStore extends Function {
     }
 
     /**
+     * Copies an existing store graph using values from before the merge.
+     * @param {*} store The value to copy; non-store values retain their identity.
+     * @param {WeakMap<StateStore, Array<[string, *]>>} snapshots The original store entries.
+     * @param {WeakMap<StateStore, StateStore>} [clones] The stores already copied.
+     * @returns {*} The copied store or original value.
+     */
+    static #cloneStore(store, snapshots, clones = new WeakMap()) {
+        if (!(store instanceof StateStore)) {
+            return store;
+        }
+
+        if (clones.has(store)) {
+            return clones.get(store);
+        }
+
+        const clone = new StateStore();
+
+        clones.set(store, clone);
+
+        for (const [key, value] of snapshots.get(store) ?? StateStore.#entries(store)) {
+            clone[key] = StateStore.#cloneStore(value, snapshots, clones);
+        }
+
+        return clone;
+    }
+
+    /**
+     * Reads stored values without tracking effects.
+     * @param {StateStore} store The store to read.
+     * @returns {Array<[string, *]>} The stored entries.
+     */
+    static #entries(store) {
+        return Array.from(store.keys(), (key) => [key, store.use(key).get(false)]);
+    }
+
+    /**
      * Wraps or merges a plain-object value while preserving cycles and shared references.
      * @template T
      * @param {*} store The existing value that may be reused as the target store.
      * @param {T} value The value to wrap or merge.
      * @param {boolean} deep Whether to process nested plain objects recursively.
      * @param {WeakMap<object, StateStore>} stores The previously visited source objects and their stores.
+     * @param {WeakMap<StateStore, Array<[string, *]>>} [snapshots] Store values before merging, used when splitting aliases.
      * @returns {StateStore|T} The merged store, or the original non-plain value.
      */
-    static #mergeValue(store, value, deep, stores) {
+    static #mergeValue(store, value, deep, stores, snapshots = new WeakMap()) {
         if (!isPlainObject(value)) {
             return value;
         }
@@ -88,7 +126,15 @@ export default class StateStore extends Function {
             return stores.get(value);
         }
 
-        const target = store instanceof StateStore ? store : new StateStore();
+        let target = store instanceof StateStore ? store : new StateStore();
+
+        if (deep) {
+            if (snapshots.has(target)) {
+                target = StateStore.#cloneStore(target, snapshots);
+            }
+
+            snapshots.set(target, StateStore.#entries(target));
+        }
 
         stores.set(value, target);
 
@@ -96,7 +142,7 @@ export default class StateStore extends Function {
             const current = target.has(key) ? target.use(key).get(false) : undefined;
 
             target[key] = deep ?
-                StateStore.#mergeValue(current, val, true, stores) :
+                StateStore.#mergeValue(current, val, true, stores, snapshots) :
                 val;
         }
 
@@ -109,18 +155,15 @@ export default class StateStore extends Function {
     constructor() {
         super();
 
-        // Free configurable Function metadata so names such as `name` and `length` can be state keys.
-        for (const key of Reflect.ownKeys(this)) {
-            if (typeof key !== 'string') {
-                continue;
-            }
+        // Preserve the reserved metadata of the original Function-backed store.
+        Object.defineProperties(this, {
+            arguments: { value: null },
+            caller: { value: null },
+        });
 
-            const descriptor = Reflect.getOwnPropertyDescriptor(this, key);
-
-            if (descriptor?.configurable) {
-                Reflect.deleteProperty(this, key);
-            }
-        }
+        // Allow Function metadata names to be used as state keys.
+        delete this.name;
+        delete this.length;
 
         const proxy = new Proxy(
             this,
@@ -131,6 +174,53 @@ export default class StateStore extends Function {
                     }
 
                     return target.use(...args);
+                },
+                defineProperty(target, prop, descriptor) {
+                    if (typeof prop === 'symbol') {
+                        return Reflect.defineProperty(target, prop, descriptor);
+                    }
+
+                    if (target.#isReservedStateKey(prop)) {
+                        return false;
+                    }
+
+                    if ('get' in descriptor || 'set' in descriptor) {
+                        return false;
+                    }
+
+                    const exists = target.has(prop);
+
+                    // Omitted flags retain existing attributes; new keys default to false.
+                    const {
+                        configurable = exists,
+                        enumerable = exists,
+                        writable = exists,
+                    } = descriptor;
+
+                    if (!configurable || !enumerable || !writable) {
+                        return false;
+                    }
+
+                    if ('value' in descriptor || !exists) {
+                        target.#assignKey(prop, descriptor.value);
+                    }
+
+                    return true;
+                },
+                deleteProperty(target, prop) {
+                    if (typeof prop === 'symbol') {
+                        return Reflect.deleteProperty(target, prop);
+                    }
+
+                    if (target.#isReservedStateKey(prop)) {
+                        return false;
+                    }
+
+                    // Retain the accessor so existing subscribers observe later writes.
+                    target.#state.get(prop)?.set(undefined);
+                    target.#visibleKeys.delete(prop);
+
+                    return true;
                 },
                 get(target, prop) {
                     if (typeof prop === 'symbol') {
@@ -181,6 +271,9 @@ export default class StateStore extends Function {
                     return Array.from(
                         new Set([...baseKeys, ...stateKeys]),
                     );
+                },
+                preventExtensions() {
+                    return false;
                 },
                 set(target, prop, value) {
                     if (typeof prop === 'symbol') {
@@ -262,9 +355,8 @@ export default class StateStore extends Function {
             return state;
         }
 
-        const state = useState(defaultValue);
+        const state = this.#createState(key, defaultValue);
 
-        this.#state.set(key, state);
         this.#visibleKeys.add(key);
 
         return state;
@@ -277,20 +369,22 @@ export default class StateStore extends Function {
      * @throws {TypeError} If `key` is reserved by `StateStore`.
      */
     #assignKey(key, value) {
-        if (this.#isReservedStateKey(key)) {
-            throw new TypeError(`"${key}" is a reserved StateStore key`);
-        }
+        this.use(key).set(value);
+    }
 
-        if (this.#state.has(key)) {
-            this.#visibleKeys.add(key);
-            this.#state.get(key).value = value;
-            return;
-        }
-
-        const state = useState(value);
+    /**
+     * Creates an accessor that exposes its key whenever it is written.
+     * @template T
+     * @param {string} key The state key.
+     * @param {T} value The initial state value.
+     * @returns {StateAccessor<T>} The state accessor.
+     */
+    #createState(key, value) {
+        const state = createState(value, () => this.#visibleKeys.add(key));
 
         this.#state.set(key, state);
-        this.#visibleKeys.add(key);
+
+        return state;
     }
 
     /**
@@ -303,7 +397,7 @@ export default class StateStore extends Function {
             return false;
         }
 
-        if (Object.prototype.hasOwnProperty.call(StateStore.prototype, key)) {
+        if (Object.hasOwn(StateStore.prototype, key)) {
             return true;
         }
 
@@ -326,10 +420,6 @@ export default class StateStore extends Function {
             return undefined;
         }
 
-        const state = useState(undefined);
-
-        this.#state.set(key, state);
-
-        return state.value;
+        return this.#createState(key, undefined).value;
     }
 }

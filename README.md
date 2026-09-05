@@ -195,6 +195,7 @@ The returned store supports:
 
 - `store.key`: read an existing key
 - `store.key = value`: write a key
+- `delete store.key`: remove a key and notify effects that read its value
 - `store.use(key, defaultValue)`: retrieve or create a state accessor
 - `store(key, defaultValue)`: retrieve or create a state accessor through the callable form
 - `store.set(object)`: set top-level keys from an object
@@ -279,8 +280,12 @@ Deep wrapping and merging preserve cycles and shared plain-object references.
 - `store.set(...)` assigns top-level keys only. Nested plain objects remain plain values.
 - Use `StateStore.wrap(..., { deep: true })` or `StateStore.merge(..., { deep: true })` for nested reactive stores.
 - Deep wrap and merge preserve cycles and shared references.
+- Deep merge separates existing shared stores when distinct incoming objects update them, preserving their pre-merge values in each branch.
 - Arrays, dates, class instances, and null-prototype objects are treated as plain values rather than nested stores.
 - Missing property reads such as `store.missing` return `undefined`. Reads made during effect tracking still subscribe to later assignment without exposing the key.
+- Deleting a key resets its accessor to `undefined` and hides the key. Writing through a previously returned accessor restores it.
+- `Object.defineProperty` supports enumerable, writable, configurable data properties. New keys must explicitly enable all three attributes; updates may omit unchanged attributes. Accessor properties and restrictive descriptors are rejected without changing the store.
+- Stores must remain extensible. `Object.preventExtensions`, `Object.seal`, and `Object.freeze` throw without changing the store.
 - API keys such as `use`, `set`, `has`, and `keys`, along with the non-configurable Function keys `arguments`, `caller`, and `prototype`, are reserved and cannot be used as state keys.
 - Weak effects rely on `WeakRef`.
 
